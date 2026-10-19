@@ -17,11 +17,11 @@ def get_db_connection():
     return conn
 
 def init_db():
-    """Garantálja, hogy az adatbázis és a táblák létezzenek az első lekérdezés előtt."""
+    """Garantálja, hogy az adatbázis és a táblák mindig a megfelelő szerkezetben létezzenek."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Felhasználók tábla
+    # Felhasználók tábla létrehozása
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +34,18 @@ def init_db():
         )
     """)
     
-    # Leadek tábla
+    # Meglévő tábla frissítése: is_active oszlop hozzáadása, ha még nem létezne
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass  # Az oszlop már létezik
+        
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN manager_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Az oszlop már létezik
+
+    # Leadek tábla létrehozása
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS leads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,18 +63,21 @@ def init_db():
         )
     """)
     
-    # Alapértelmezett admin felvétele, ha üres a users tábla
+    # Alapértelmezett admin felvétele, ha nincs felhasználó
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         cursor.execute("""
             INSERT INTO users (username, password, name, role, is_active)
             VALUES ('admin', 'admin123', 'Főigazgató', 'Igazgató', 1)
         """)
+    else:
+        # Ha létezik admin, biztosítjuk, hogy aktív legyen
+        cursor.execute("UPDATE users SET is_active = 1 WHERE username = 'admin'")
     
     conn.commit()
     conn.close()
 
-# Indításkor automatikusan lefut a táblák ellenőrzése / létrehozása
+# Indításkor automatikusan lefut a táblák frissítése
 init_db()
 
 # ==========================================
@@ -155,11 +169,11 @@ if not st.session_state["user"]:
         username = st.text_input("Felhasználónév (E-mail)")
         password = st.text_input("Jelszó", type="password")
         if st.button("Belépés", use_container_width=True):
-            init_db()  # Biztosítjuk az adatbázis létezését bejelentkezéskor is
+            init_db()  # Biztosítjuk a struktúrát belépés előtt is
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT * FROM users WHERE username = ? AND password = ? AND is_active = 1",
+                "SELECT * FROM users WHERE username = ? AND password = ? AND (is_active = 1 OR is_active IS NULL)",
                 (username, password)
             )
             user = cursor.fetchone()
@@ -243,9 +257,9 @@ elif menu == "Lead Kiosztás & Visszavétel":
     leads = cursor.fetchall()
 
     if current_user["role"] == "Igazgató":
-        cursor.execute("SELECT id, name, role FROM users WHERE is_active = 1 AND role != 'Igazgató'")
+        cursor.execute("SELECT id, name, role FROM users WHERE (is_active = 1 OR is_active IS NULL) AND role != 'Igazgató'")
     else:
-        cursor.execute("SELECT id, name, role FROM users WHERE is_active = 1 AND manager_id = ?", (current_user["id"],))
+        cursor.execute("SELECT id, name, role FROM users WHERE (is_active = 1 OR is_active IS NULL) AND manager_id = ?", (current_user["id"],))
     staff = cursor.fetchall()
     conn.close()
 
@@ -317,7 +331,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name FROM users WHERE role = 'Manager' AND is_active = 1")
+        cursor.execute("SELECT id, name FROM users WHERE role = 'Manager' AND (is_active = 1 OR is_active IS NULL)")
         managers = cursor.fetchall()
         conn.close()
 
