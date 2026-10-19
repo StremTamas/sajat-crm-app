@@ -5,11 +5,11 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # ==========================================
-# 1. OLDAL BEÁLLÍTÁSAI ÉS ADATBÁZIS
+# 1. OLDAL BEÁLLÍTÁSAI ÉS ADATBÁZIS (ÚJ LEVÁLASZTOTT DB)
 # ==========================================
 st.set_page_config(page_title="Alfa Arrabona CRM", page_icon="💼", layout="wide")
 
-DB_FILE = "crm_database.db"
+DB_FILE = "crm_data_v2.db"  # Tiszta adatbázis-fájl név a szerver-ütközések elkerülésére
 
 def get_db_connection():
     conn = sqlite3.connect(DB_FILE)
@@ -17,11 +17,11 @@ def get_db_connection():
     return conn
 
 def init_db():
-    """Garantálja az adatbázis-szerkezetet ÉS az admin fiók létezését."""
+    """Létrehozza a friss és hibátlan adatbázis-szerkezetet."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Felhasználók tábla
+    # 1. Users tábla
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +34,7 @@ def init_db():
         )
     """)
 
-    # Leadek tábla
+    # 2. Leads tábla
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS leads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,17 +52,18 @@ def init_db():
         )
     """)
     
-    # ADMIN FIÓK FELÜLÍRÁSA / GARANTÁLÁSA (admin / admin123)
-    cursor.execute("DELETE FROM users WHERE username = 'admin'")
-    cursor.execute("""
-        INSERT INTO users (username, password, name, role, is_active)
-        VALUES ('admin', 'admin123', 'Főigazgató', 'Igazgató', 1)
-    """)
+    # 3. Alapértelmezett Admin fiók létrehozása
+    cursor.execute("SELECT COUNT(*) FROM users WHERE username = 'admin'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("""
+            INSERT INTO users (username, password, name, role, is_active)
+            VALUES ('admin', 'admin123', 'Főigazgató', 'Igazgató', 1)
+        """)
     
     conn.commit()
     conn.close()
 
-# Indításkor AZONNAL lefut a helyreállítás
+# Indításkor automatikusan lefut az adatbázis felépítése
 init_db()
 
 # ==========================================
@@ -151,10 +152,9 @@ if not st.session_state["user"]:
     st.title("💼 Alfa Arrabona CRM – Bejelentkezés")
     col1, col2 = st.columns([1, 2])
     with col1:
-        username = st.text_input("Felhasználónév (E-mail)")
+        username = st.text_input("Felhasználónév")
         password = st.text_input("Jelszó", type="password")
         if st.button("Belépés", use_container_width=True):
-            init_db()  # Helyreállítja az admin fiókot belépés előtt
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
