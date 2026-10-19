@@ -17,11 +17,11 @@ def get_db_connection():
     return conn
 
 def init_db():
-    """Garantálja, hogy az adatbázis és a táblák mindig a megfelelő szerkezetben létezzenek."""
+    """Létrehozza és frissíti a szükséges táblákat és oszlopokat."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Felhasználók tábla létrehozása
+    # Felhasználók tábla
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,19 +33,19 @@ def init_db():
             is_active INTEGER DEFAULT 1
         )
     """)
-    
-    # Meglévő tábla frissítése: is_active oszlop hozzáadása, ha még nem létezne
+
+    # Oszlopok pótlása, ha régi adatbázis-fájl létezne
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1")
-    except sqlite3.OperationalError:
-        pass  # Az oszlop már létezik
+    except Exception:
+        pass
         
     try:
         cursor.execute("ALTER TABLE users ADD COLUMN manager_id INTEGER")
-    except sqlite3.OperationalError:
-        pass  # Az oszlop már létezik
+    except Exception:
+        pass
 
-    # Leadek tábla létrehozása
+    # Leadek tábla
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS leads (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,21 +63,24 @@ def init_db():
         )
     """)
     
-    # Alapértelmezett admin felvétele, ha nincs felhasználó
-    cursor.execute("SELECT COUNT(*) FROM users")
-    if cursor.fetchone()[0] == 0:
+    # Alapértelmezett admin felvétele, ha üres a users tábla
+    try:
+        cursor.execute("SELECT COUNT(*) FROM users")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("""
+                INSERT INTO users (username, password, name, role, is_active)
+                VALUES ('admin', 'admin123', 'Főigazgató', 'Igazgató', 1)
+            """)
+    except Exception:
         cursor.execute("""
-            INSERT INTO users (username, password, name, role, is_active)
+            INSERT OR IGNORE INTO users (username, password, name, role, is_active)
             VALUES ('admin', 'admin123', 'Főigazgató', 'Igazgató', 1)
         """)
-    else:
-        # Ha létezik admin, biztosítjuk, hogy aktív legyen
-        cursor.execute("UPDATE users SET is_active = 1 WHERE username = 'admin'")
-    
+        
     conn.commit()
     conn.close()
 
-# Indításkor automatikusan lefut a táblák frissítése
+# Indításkor AZONNAL lefut a struktúra biztosítása
 init_db()
 
 # ==========================================
@@ -169,15 +172,19 @@ if not st.session_state["user"]:
         username = st.text_input("Felhasználónév (E-mail)")
         password = st.text_input("Jelszó", type="password")
         if st.button("Belépés", use_container_width=True):
-            init_db()  # Biztosítjuk a struktúrát belépés előtt is
+            init_db()  # Minden belépési kísérletnél lefut a struktúraellenőrzés
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM users WHERE username = ? AND password = ? AND (is_active = 1 OR is_active IS NULL)",
-                (username, password)
-            )
-            user = cursor.fetchone()
+            try:
+                cursor.execute(
+                    "SELECT * FROM users WHERE username = ? AND password = ?",
+                    (username, password)
+                )
+                user = cursor.fetchone()
+            except Exception:
+                user = None
             conn.close()
+            
             if user:
                 st.session_state["user"] = dict(user)
                 st.rerun()
@@ -257,9 +264,9 @@ elif menu == "Lead Kiosztás & Visszavétel":
     leads = cursor.fetchall()
 
     if current_user["role"] == "Igazgató":
-        cursor.execute("SELECT id, name, role FROM users WHERE (is_active = 1 OR is_active IS NULL) AND role != 'Igazgató'")
+        cursor.execute("SELECT id, name, role FROM users WHERE role != 'Igazgató'")
     else:
-        cursor.execute("SELECT id, name, role FROM users WHERE (is_active = 1 OR is_active IS NULL) AND manager_id = ?", (current_user["id"],))
+        cursor.execute("SELECT id, name, role FROM users WHERE manager_id = ?", (current_user["id"],))
     staff = cursor.fetchall()
     conn.close()
 
@@ -304,58 +311,4 @@ elif menu == "Új Lead Feltöltés":
         submitted = st.form_submit_button("Lead Rögzítése")
 
         if submitted and client_name:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO leads (client_name, phone, email, address, source, status)
-                VALUES (?, ?, ?, ?, ?, 'Új')
-            """, (client_name, phone, email, address, source))
-            conn.commit()
-            conn.close()
-            st.success("Új lead sikeresen rögzítve!")
-
-# D) FELHASZNÁLÓK KEZELÉSE
-elif menu == "Felhasználók Kezelése (Jogosultságok)":
-    st.title("👥 Felhasználók & Belépési Jogosultságok")
-
-    if current_user["role"] != "Igazgató":
-        st.error("Csak az Igazgató kezelheti a felhasználókat.")
-        st.stop()
-
-    st.subheader("Új Munkatárs Hozzáadása")
-    with st.form("add_user_form"):
-        new_username = st.text_input("Felhasználónév (E-mail)")
-        new_name = st.text_input("Munkatárs Teljes Neve")
-        new_password = st.text_input("Kezdő Jelszó", type="password")
-        new_role = st.selectbox("Szerepkör", ["Manager", "Tanácsadó"])
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name FROM users WHERE role = 'Manager' AND (is_active = 1 OR is_active IS NULL)")
-        managers = cursor.fetchall()
-        conn.close()
-
-        manager_opts = {m["id"]: m["name"] for m in managers}
-        manager_opts[None] = "Nincs"
-
-        selected_manager = st.selectbox(
-            "Felettes Manager (Tanácsadó esetén):",
-            options=list(manager_opts.keys()),
-            format_func=lambda x: manager_opts[x]
-        )
-
-        if st.form_submit_button("Felhasználó Létrehozása"):
-            if new_username and new_password and new_name:
-                try:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO users (username, password, name, role, manager_id, is_active)
-                        VALUES (?, ?, ?, ?, ?, 1)
-                    """, (new_username, new_password, new_name, new_role, selected_manager))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"Munkatárs sikeresen hozzáadva: {new_name}")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Hiba a létrehozás során: {e}")
+            conn = get
