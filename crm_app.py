@@ -5,7 +5,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # ==========================================
-# 1. OLDAL BEÁLLÍTÁSOI ÉS ADATBÁZIS
+# 1. OLDAL BEÁLLÍTÁSAI ÉS ADATBÁZIS
 # ==========================================
 st.set_page_config(page_title="Alfa Arrabona CRM", page_icon="💼", layout="wide")
 
@@ -17,7 +17,7 @@ def get_db_connection():
     return conn
 
 def init_db():
-    """Garantálja, hogy az adatbázis és a táblák mindig létezzenek az első lekérdezés előtt."""
+    """Garantálja, hogy az adatbázis és a táblák létezzenek az első lekérdezés előtt."""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -63,7 +63,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Indításkor azonnal lefut az adatbázis-inicializálás
+# Indításkor automatikusan lefut a táblák ellenőrzése / létrehozása
 init_db()
 
 # ==========================================
@@ -155,7 +155,7 @@ if not st.session_state["user"]:
         username = st.text_input("Felhasználónév (E-mail)")
         password = st.text_input("Jelszó", type="password")
         if st.button("Belépés", use_container_width=True):
-            init_db()  # Biztosítjuk a táblák létezését a lekérdezés előtt
+            init_db()  # Biztosítjuk az adatbázis létezését bejelentkezéskor is
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
