@@ -60,11 +60,10 @@ init_db()
 # ==========================================
 # 2. KIZÁRÓLAG A VÁLASZADÓ TÁBLÁZATOK BEKÖTÉSE
 # ==========================================
-# Itt KIZÁRÓLAG a válaszokat / kitöltéseket gyűjtő Google Forms Sheet ID-kat adjuk meg!
 SHEET_SOURCES = [
     {
         "name": "Vállalkozói Felmérés (Válaszadók)",
-        "id": "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis", # A válaszadó Sheet ID-ja
+        "id": "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis",
         "worksheet": "Munkalap1"
     },
     {
@@ -110,7 +109,6 @@ def sync_google_sheets_to_crm():
                     cim = r.get("Székhely / Cím", r.get("Ügyfél_Címe", ""))
                     kapcsolattarto = r.get("Kapcsolattartó neve", r.get("Kapcsolattartó", ""))
 
-                    # Csak akkor tekintjük érvényes kitöltésnek/visszajelzésnek, ha van név és e-mail
                     if email and nev:
                         cursor.execute(
                             "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND client_name != '')",
@@ -169,6 +167,173 @@ if st.sidebar.button("🔄 Élő Google Sheets Szinkronizálás"):
     count = sync_google_sheets_to_crm()
     st.sidebar.success(f"{count} új valódi lead beolvasva!")
 
-# Adatbázis kitisztítása (felesleges nyers tömeges adatok törlése)
+# Adatbázis kitisztítása
 if current_user["role"] == "Igazgató":
-    if st.sidebar.button("🧹 Nyers/Hibás Leadek Törlése (
+    if st.sidebar.button("🧹 Nyers/Hibás Leadek Törlése"):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM leads WHERE status = 'Új'")
+        conn.commit()
+        conn.close()
+        st.sidebar.warning("Még nem kiosztott leadek törölve!")
+        st.rerun()
+
+if st.sidebar.button("Kijelentkezés"):
+    st.session_state["user"] = None
+    st.rerun()
+
+menu = st.sidebar.radio(
+    "Navigáció",
+    [
+        "Saját Leadek / Dashboard",
+        "Lead Kiosztás & Visszavétel",
+        "Új Lead Feltöltés",
+        "Felhasználók Kezelése (Jogosultságok)"
+    ]
+)
+
+# ==========================================
+# 4. MODULOK ÉS NÉZETEK
+# ==========================================
+
+if menu == "Saját Leadek / Dashboard":
+    st.title("📊 Saját Leadek és Áttekintés")
+    conn = get_db_connection()
+
+    if current_user["role"] == "Igazgató":
+        query = "SELECT * FROM leads ORDER BY id DESC"
+        params = ()
+    elif current_user["role"] == "Manager":
+        query = """
+            SELECT * FROM leads 
+            WHERE assigned_manager_id = ? 
+               OR assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = ?)
+            ORDER BY id DESC
+        """
+        params = (current_user["id"], current_user["id"])
+    else:
+        query = "SELECT * FROM leads WHERE assigned_advisor_id = ? ORDER BY id DESC"
+        params = (current_user["id"],)
+
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("Jelenleg nincs megjeleníthető lead.")
+
+elif menu == "Lead Kiosztás & Visszavétel":
+    st.title("🎯 Lead Kiosztás és Visszavétel")
+
+    if current_user["role"] not in ["Igazgató", "Manager"]:
+        st.warning("Ehhez a menüponthoz nincs jogosultságod.")
+        st.stop()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM leads WHERE status != 'Lezárt' ORDER BY id DESC")
+    leads = cursor.fetchall()
+
+    if current_user["role"] == "Igazgató":
+        cursor.execute("SELECT id, name, role FROM users WHERE role != 'Igazgató'")
+    else:
+        cursor.execute("SELECT id, name, role FROM users WHERE manager_id = ?", (current_user["id"],))
+    staff = cursor.fetchall()
+    conn.close()
+
+    st.subheader("Meglévő Leadek Kezelése")
+    for l in leads:
+        col1, col2, col3 = st.columns([3, 3, 2])
+        with col1:
+            st.write(f"**{l['client_name']}** ({l['source']}) - Status: `{l['status']}`")
+            st.caption(f"E-mail: {l['email']} | Tel: {l['phone']}")
+        with col2:
+            staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
+            staff_options[None] = "-- Nincs kiosztva --"
+
+            selected_staff = st.selectbox(
+                "Felelős hozzárendelése",
+                options=list(staff_options.keys()),
+                format_func=lambda x: staff_options[x],
+                key=f"staff_{l['id']}"
+            )
+        with col3:
+            if st.button("Mentés / Kiosztás", key=f"btn_{l['id']}"):
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE leads SET assigned_advisor_id = ?, status = 'Kiosztva' WHERE id = ?",
+                    (selected_staff, l["id"])
+                )
+                conn.commit()
+                conn.close()
+                st.success("Lead sikeresen frissítve!")
+                st.rerun()
+
+elif menu == "Új Lead Feltöltés":
+    st.title("➕ Új Lead Manuális Hozzáadása")
+    with st.form("new_lead_form"):
+        client_name = st.text_input("Ügyfél / Cégnév")
+        phone = st.text_input("Telefonszám")
+        email = st.text_input("E-mail cím")
+        address = st.text_input("Cím / Székhely")
+        source = st.selectbox("Forrás", ["Promobox Kampány", "Vállalkozói Felmérés", "Ügyfélklub", "Évfordulós Felülvizsgálat", "Személyes Ajánlás"])
+        submitted = st.form_submit_button("Lead Rögzítése")
+
+        if submitted and client_name:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO leads (client_name, phone, email, address, source, status)
+                VALUES (?, ?, ?, ?, ?, 'Új')
+            """, (client_name, phone, email, address, source))
+            conn.commit()
+            conn.close()
+            st.success("Új lead sikeresen rögzítve!")
+
+elif menu == "Felhasználók Kezelése (Jogosultságok)":
+    st.title("👥 Felhasználók & Belépési Jogosultságok")
+
+    if current_user["role"] != "Igazgató":
+        st.error("Csak az Igazgató kezelheti a felhasználókat.")
+        st.stop()
+
+    st.subheader("Új Munkatárs Hozzáadása")
+    with st.form("add_user_form"):
+        new_username = st.text_input("Felhasználónév (E-mail)")
+        new_name = st.text_input("Munkatárs Teljes Neve")
+        new_password = st.text_input("Kezdő Jelszó", type="password")
+        new_role = st.selectbox("Szerepkör", ["Manager", "Tanácsadó"])
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM users WHERE role = 'Manager'")
+        managers = cursor.fetchall()
+        conn.close()
+
+        manager_opts = {m["id"]: m["name"] for m in managers}
+        manager_opts[None] = "Nincs"
+
+        selected_manager = st.selectbox(
+            "Felettes Manager (Tanácsadó esetén):",
+            options=list(manager_opts.keys()),
+            format_func=lambda x: manager_opts[x]
+        )
+
+        if st.form_submit_button("Felhasználó Létrehozása"):
+            if new_username and new_password and new_name:
+                try:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        INSERT INTO users (username, password, name, role, manager_id, is_active)
+                        VALUES (?, ?, ?, ?, ?, 1)
+                    """, (new_username, new_password, new_name, new_role, selected_manager))
+                    conn.commit()
+                    conn.close()
+                    st.success(f"Munkatárs sikeresen hozzáadva: {new_name}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Hiba a létrehozás során: {e}")
