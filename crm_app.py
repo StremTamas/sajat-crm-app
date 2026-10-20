@@ -12,10 +12,47 @@ import pandas as pd
 import streamlit as st
 
 # ==========================================
-# 1. OLDAL BEÁLLÍTÁSAI ÉS KONFIGURÁCIÓ
+# 1. OLDAL BEÁLLÍTÁSAI ÉS EGYEDI STÍLUS (CSS)
 # ==========================================
 st.set_page_config(
     page_title="Alfa Arrabona CRM", page_icon="💼", layout="wide"
+)
+
+# Színes, modern dizájn injektálása
+st.markdown(
+    """
+    <style>
+    /* Főháttér és betűstílus */
+    .stApp {
+        background-color: #f8f9fa;
+    }
+    /* Oldalsáv stílus */
+    section[data-testid="stSidebar"] {
+        background-color: #1e293b !important;
+        color: #ffffff !important;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #f1f5f9 !important;
+    }
+    /* Gombok egyedi színe */
+    .stButton>button {
+        border-radius: 8px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    /* Címek és fejléc stílus */
+    h1, h2, h3 {
+        color: #0f172a;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    /* Kártyák és dobozok kiemelése */
+    div[data-testid="stMetricValue"] {
+        font-size: 24px;
+        color: #0284c7;
+    }
+    </style>
+""",
+    unsafe_allow_html=True,
 )
 
 DB_FILE = "crm_data_v2.db"
@@ -25,9 +62,9 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
 SENDER_EMAIL = "arrabonainsurance@gmail.com"
 SENDER_NAME = "Insurance Arrabona"
-SENDER_PASSWORD = "aqzs okrl jewl ypdw"  # 16 jegyű alkalmazásjelszó
+SENDER_PASSWORD = "aqzs okrl jewl ypdw"
 
-# PONTOS Google Form válaszok táblázat ID-ja és munkalap nevei
+# Google Form válaszok táblázat ID-ja és munkalap nevek
 FORM_SPREADSHEET_ID = "1hlFrgfdUDANg1m2gIA6w_10kI5ODQ_TIw8v9-WmYf-g"
 POSSIBLE_FORM_SHEETS = [
     "Form Responses 1",
@@ -103,7 +140,6 @@ SHEET_SOURCES = [
 
 
 def get_gspread_client():
-  """A gspread kliens inicializálása Streamlit Secrets-ből (vagy local credentials.json-ból)."""
   scopes = [
       "https://www.googleapis.com/auth/spreadsheets",
       "https://www.googleapis.com/auth/drive",
@@ -120,12 +156,10 @@ def get_gspread_client():
 
 
 def sync_google_sheets_to_crm():
-  """Kizárólag a ténylegesen VÁLASZOLÓ / KITÖLTŐ ügyfeleket emeli át a CRM-be."""
   try:
     client = get_gspread_client()
     conn = get_db_connection()
     cursor = conn.cursor()
-
     new_leads_count = 0
 
     for src in SHEET_SOURCES:
@@ -135,7 +169,6 @@ def sync_google_sheets_to_crm():
 
         for row in records:
           r = {str(k).strip(): str(v).strip() for k, v in row.items()}
-
           email = r.get(
               "E-mail cím", r.get("Email", r.get("Ügyfél_Email", ""))
           )
@@ -223,12 +256,10 @@ def get_elutasito_email(nev):
 
 
 def process_form_evaluations():
-  """Elvégzi a Form válaszok manuális kiértékelését szigorú biztonsági ellenőrzésekkel."""
   try:
     gc = get_gspread_client()
     spreadsheet = gc.open_by_key(FORM_SPREADSHEET_ID)
 
-    # BIZTONSÁGI RETESZ 1: Csak a Form válaszok munkalapot nyithatja meg!
     sheet = None
     for name in POSSIBLE_FORM_SHEETS:
       try:
@@ -240,11 +271,9 @@ def process_form_evaluations():
     if sheet is None:
       st.error(
           "⛔ **LEÁLLÍTVA:** A Google Form válaszok munkalap nem található az"
-          " 'Értékesítési ügynökség válaszok' táblázatban! A rendszer a"
-          " biztonság kedvéért leállt."
+          " 'Értékesítési ügynökség válaszok' táblázatban!"
       )
       return
-
   except Exception as e:
     st.error(f"Hiba a Google Sheet megnyitásakor: {e}")
     return
@@ -257,7 +286,6 @@ def process_form_evaluations():
       if "Kiértékelés_Státusz" in headers
       else None
   )
-
   feldolgozott_count = 0
 
   with st.spinner("Form válaszok beolvasása és kiértékelése folyamatban..."):
@@ -268,23 +296,18 @@ def process_form_evaluations():
         email = str(row.get("Email", row.get("E-mail cím", ""))).strip()
         nev = str(row.get("Név", "")).strip()
 
-        # BIZTONSÁGI RETESZ 2: Időbélyeg (Timestamp) meglétének ellenőrzése
         timestamp = str(
             row.get("Időbélyeg", row.get("Timestamp", ""))
         ).strip()
-
-        # BIZTONSÁGI RETESZ 3: Vállalkozói szándék válasz kiolvasása
         raw_vallalkozo = row.get(
             "Nyitott vállalkozói jogviszonyra?",
             row.get("Vállalkozói szándék", ""),
         )
         vallalkozo_valasz = str(raw_vallalkozo).strip().lower()
 
-        # Ha nincs időbélyeg vagy hiányzik a válasz, KIHAGYJUK!
         if not timestamp or not vallalkozo_valasz:
           continue
 
-        # KIZÁRÓ FELTÉTEL
         is_rejected = False
         kizaro_kulcsszavak = [
             "nem",
@@ -317,7 +340,6 @@ def process_form_evaluations():
 
         try:
           send_email_smtp(email, subject, html_body)
-
           if statusz_col_idx:
             sheet.update_cell(i, statusz_col_idx, uj_statusz)
 
@@ -331,7 +353,6 @@ def process_form_evaluations():
 
           feldolgozott_count += 1
           time.sleep(random.randint(10, 20))
-
         except Exception as err:
           st.error(f"Hiba a levél küldésekor ({nev}): {err}")
 
@@ -342,7 +363,7 @@ def process_form_evaluations():
         " visszajelzést."
     )
   else:
-    st.info("Nem található új, kiértékelésre váró kérdőív válasz.")
+    st.info("Nem található új, kitöltött kérdőív válasz.")
 
 
 # ==========================================
@@ -355,13 +376,14 @@ if not st.session_state["user"]:
   st.title("💼 Alfa Arrabona CRM – Bejelentkezés")
   col1, col2 = st.columns([1, 2])
   with col1:
-    username = st.text_input("Felhasználónév")
+    username = st.text_input("Felhasználónév (E-mail)")
     password = st.text_input("Jelszó", type="password")
-    if st.button("Belépés", use_container_width=True):
+    if st.button("Belépés", use_container_width=True, type="primary"):
       conn = get_db_connection()
       cursor = conn.cursor()
       cursor.execute(
-          "SELECT * FROM users WHERE username = ? AND password = ?",
+          "SELECT * FROM users WHERE username = ? AND password = ? AND"
+          " is_active = 1",
           (username.strip(), password.strip()),
       )
       user = cursor.fetchone()
@@ -383,7 +405,7 @@ if st.sidebar.button("🔄 Élő Google Sheets Szinkronizálás"):
   count = sync_google_sheets_to_crm()
   st.sidebar.success(f"{count} új valódi lead beolvasva!")
 
-if current_user["role"] == "Igazgató":
+if current_user["role"] in ["Igazgató", "Asszisztens"]:
   if st.sidebar.button("🧹 Nyers/Hibás Leadek Törlése"):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -393,20 +415,20 @@ if current_user["role"] == "Igazgató":
     st.sidebar.warning("Még nem kiosztott leadek törölve!")
     st.rerun()
 
-if st.sidebar.button("Kijelentkezés"):
+if st.sidebar.button("🚪 Kijelentkezés"):
   st.session_state["user"] = None
   st.rerun()
 
-menu = st.sidebar.radio(
-    "Navigáció",
-    [
-        "Saját Leadek / Dashboard",
-        "Lead Kiosztás & Visszavétel",
-        "Új Lead Feltöltés",
-        "📥 Toborzási Form Kiértékelés",
-        "Felhasználók Kezelése (Jogosultságok)",
-    ],
-)
+menu_options = [
+    "Saját Leadek / Dashboard",
+    "Lead Kiosztás & Visszavétel",
+    "Új Lead Feltöltés",
+    "📥 Toborzási Form Kiértékelés",
+    "Felhasználók Kezelése (Jogosultságok)",
+    "🔐 Saját Profil & Jelszócsere",
+]
+
+menu = st.sidebar.radio("Navigáció", menu_options)
 
 # ==========================================
 # 5. MODULOK ÉS NÉZETEK
@@ -416,7 +438,8 @@ if menu == "Saját Leadek / Dashboard":
   st.title("📊 Saját Leadek és Áttekintés")
   conn = get_db_connection()
 
-  if current_user["role"] == "Igazgató":
+  # Igazgató és Asszisztens látja az összes leadet
+  if current_user["role"] in ["Igazgató", "Asszisztens"]:
     query = "SELECT * FROM leads ORDER BY id DESC"
     params = ()
   elif current_user["role"] == "Manager":
@@ -444,19 +467,18 @@ if menu == "Saját Leadek / Dashboard":
 elif menu == "Lead Kiosztás & Visszavétel":
   st.title("🎯 Lead Kiosztás és Visszavétel")
 
-  if current_user["role"] not in ["Igazgató", "Manager"]:
+  if current_user["role"] not in ["Igazgató", "Manager", "Asszisztens"]:
     st.warning("Ehhez a menüponthoz nincs jogosultságod.")
     st.stop()
 
   conn = get_db_connection()
   cursor = conn.cursor()
-
   cursor.execute(
       "SELECT * FROM leads WHERE status != 'Lezárt' ORDER BY id DESC"
   )
   leads = cursor.fetchall()
 
-  if current_user["role"] == "Igazgató":
+  if current_user["role"] in ["Igazgató", "Asszisztens"]:
     cursor.execute("SELECT id, name, role FROM users WHERE role != 'Igazgató'")
   else:
     cursor.execute(
@@ -515,7 +537,7 @@ elif menu == "Új Lead Feltöltés":
             "Személyes Ajánlás",
         ],
     )
-    submitted = st.form_submit_button("Lead Rögzítése")
+    submitted = st.form_submit_button("Lead Rögzítése", type="primary")
 
     if submitted and client_name:
       conn = get_db_connection()
@@ -544,8 +566,8 @@ elif menu == "📥 Toborzási Form Kiértékelés":
 elif menu == "Felhasználók Kezelése (Jogosultságok)":
   st.title("👥 Felhasználók & Belépési Jogosultságok")
 
-  if current_user["role"] != "Igazgató":
-    st.error("Csak az Igazgató kezelheti a felhasználókat.")
+  if current_user["role"] not in ["Igazgató", "Asszisztens"]:
+    st.error("Csak az Igazgató és az Asszisztens kezelheti a felhasználókat.")
     st.stop()
 
   # 1. MEGLÉVŐ FELHASZNÁLÓK LISTÁJA
@@ -570,13 +592,15 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
 
   st.divider()
 
-  # 2. ÚJ MUNKATÁRS HOZZÁADÁSA
+  # 2. ÚJ MUNKATÁRS HOZZÁADÁSA (Asszisztens opcióval)
   st.subheader("➕ Új Munkatárs Hozzáadása")
   with st.form("add_user_form"):
     new_username = st.text_input("Felhasználónév (E-mail)")
     new_name = st.text_input("Munkatárs Teljes Neve")
     new_password = st.text_input("Kezdő Jelszó", type="password")
-    new_role = st.selectbox("Szerepkör", ["Manager", "Tanácsadó"])
+    new_role = st.selectbox(
+        "Szerepkör", ["Manager", "Tanácsadó", "Asszisztens"]
+    )
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -596,7 +620,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
         format_func=lambda x: manager_opts[x],
     )
 
-    if st.form_submit_button("Felhasználó Létrehozása"):
+    if st.form_submit_button("Felhasználó Létrehozása", type="primary"):
       if new_username and new_password and new_name:
         try:
           conn = get_db_connection()
@@ -620,3 +644,32 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
           st.rerun()
         except Exception as e:
           st.error(f"Hiba a létrehozás során: {e}")
+
+elif menu == "🔐 Saját Profil & Jelszócsere":
+  st.title("🔐 Saját Profil & Jelszómódosítás")
+  st.write(f"Bejelentkezve mint: **{current_user['name']}** ({current_user['username']})")
+
+  with st.form("change_password_form"):
+    old_pw = st.text_input("Jelenlegi jelszó", type="password")
+    new_pw = st.text_input("Új jelszó", type="password")
+    new_pw_confirm = st.text_input("Új jelszó megerősítése", type="password")
+    submit_pw = st.form_submit_button("Jelszó Módosítása", type="primary")
+
+    if submit_pw:
+      if old_pw != current_user["password"]:
+        st.error("A jelenlegi jelszó nem megfelelő!")
+      elif new_pw != new_pw_confirm:
+        st.error("A két új jelszó nem egyezik meg!")
+      elif len(new_pw) < 6:
+        st.warning("Az új jelszónak legalább 6 karakter hosszúnak kell lennie!")
+      else:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET password = ? WHERE id = ?",
+            (new_pw.strip(), current_user["id"]),
+        )
+        conn.commit()
+        conn.close()
+        st.session_state["user"]["password"] = new_pw.strip()
+        st.success("Jelszavadat sikeresen megváltoztattad!")
