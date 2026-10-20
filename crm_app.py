@@ -27,9 +27,14 @@ SENDER_EMAIL = "arrabonainsurance@gmail.com"
 SENDER_NAME = "Insurance Arrabona"
 SENDER_PASSWORD = "aqzs okrl jewl ypdw"  # 16 jegyű alkalmazásjelszó
 
-# Google Form válaszok munkalap adatai
-FORM_SPREADSHEET_ID = "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis"
-POSSIBLE_SHEET_NAMES = ["Form Responses 1", "Munkalap1", "Űrlapválaszok 1"]
+# PONTOS Google Form válaszok táblázat ID-ja és munkalap nevei
+FORM_SPREADSHEET_ID = "1hlFrgfdUDANg1m2gIA6w_10kI5ODQ_TIw8v9-WmYf-g"
+POSSIBLE_FORM_SHEETS = [
+    "Form Responses 1",
+    "Űrlapválaszok 1",
+    "Form-válaszok 1",
+    "Válaszok",
+]
 
 
 def get_db_connection():
@@ -218,13 +223,14 @@ def get_elutasito_email(nev):
 
 
 def process_form_evaluations():
-  """Elvégzi a Form válaszok manuális kiértékelését és kiküldi a megfelelő válaszleveleket."""
+  """Elvégzi a Form válaszok manuális kiértékelését szigorú biztonsági ellenőrzésekkel."""
   try:
     gc = get_gspread_client()
     spreadsheet = gc.open_by_key(FORM_SPREADSHEET_ID)
 
+    # BIZTONSÁGI RETESZ 1: Csak a Form válaszok munkalapot nyithatja meg!
     sheet = None
-    for name in POSSIBLE_SHEET_NAMES:
+    for name in POSSIBLE_FORM_SHEETS:
       try:
         sheet = spreadsheet.worksheet(name)
         break
@@ -232,7 +238,12 @@ def process_form_evaluations():
         continue
 
     if sheet is None:
-      sheet = spreadsheet.get_worksheet(0)
+      st.error(
+          "⛔ **LEÁLLÍTVA:** A Google Form válaszok munkalap nem található az"
+          " 'Értékesítési ügynökség válaszok' táblázatban! A rendszer a"
+          " biztonság kedvéért leállt."
+      )
+      return
 
   except Exception as e:
     st.error(f"Hiba a Google Sheet megnyitásakor: {e}")
@@ -254,20 +265,26 @@ def process_form_evaluations():
       kiertekeles = str(row.get("Kiértékelés_Státusz", "")).strip()
 
       if kiertekeles in ["", "Új", "Feldolgozatlan"]:
-        email = str(row.get("Email", "")).strip()
+        email = str(row.get("Email", row.get("E-mail cím", ""))).strip()
         nev = str(row.get("Név", "")).strip()
 
-        if not email:
+        # BIZTONSÁGI RETESZ 2: Időbélyeg (Timestamp) meglétének ellenőrzése
+        timestamp = str(
+            row.get("Időbélyeg", row.get("Timestamp", ""))
+        ).strip()
+
+        # BIZTONSÁGI RETESZ 3: Vállalkozói szándék válasz kiolvasása
+        raw_vallalkozo = row.get(
+            "Nyitott vállalkozói jogviszonyra?",
+            row.get("Vállalkozói szándék", ""),
+        )
+        vallalkozo_valasz = str(raw_vallalkozo).strip().lower()
+
+        # Ha nincs időbélyeg vagy hiányzik a válasz, KIHAGYJUK!
+        if not timestamp or not vallalkozo_valasz:
           continue
 
-        vallalkozo_valasz = str(
-            row.get(
-                "Nyitott vállalkozói jogviszonyra?",
-                row.get("Vállalkozói szándék", ""),
-            )
-        ).lower()
-
-        # VÍZHATLAN SZŰRÉS: Kizárólag főállás / nem vállalkozó szándék kiszűrése
+        # KIZÁRÓ FELTÉTEL
         is_rejected = False
         kizaro_kulcsszavak = [
             "nem",
@@ -321,8 +338,8 @@ def process_form_evaluations():
   if feldolgozott_count > 0:
     st.balloons()
     st.success(
-        f"A kiértékelés lefutott! Összesen {feldolgozott_count} új jelölt kapta"
-        " meg a visszajelzést."
+        f"A kiértékelés lefutott! Összesen {feldolgozott_count} új kitöltő kapott"
+        " visszajelzést."
     )
   else:
     st.info("Nem található új, kiértékelésre váró kérdőív válasz.")
