@@ -241,7 +241,7 @@ def get_elutasito_email(nev):
     <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6;">
         <p>Kedves {nev}!</p>
         <p>Köszönjük, hogy időt szánt a kérdőívünk kitöltésére és érdeklődött a győri Alfa VIG karrierlehetőségei iránt.</p>
-        <p>Sajnálattal tájékoztatjuk, hogy a jelenlegi nyitott pozícióinkhoz elengedhetetlen a vállalkozói jogviszony keretében történő együttműködés. Mivel Ön jelzése alapján kizárólag főállású/alkalmazotti jogviszonyban gondolkodik, így jelenleg nem tudjuk továbbléptetni a kiválasztási folyamatban.</p>
+        <p>Sajnálattal tájékoztatjuk, hogy a jelenlegi nyitott pozícióinkhoz elengedhetetlen a vállalkozói jogviszony keretében történő együttműködés. Mivel Ön jelzése alapján kizárólag főállású/alkalmazotti jogviszonyban gondolkodik, így jelenleg nem tudjuk tovabléptetni a kiválasztási folyamatban.</p>
         <p>Sok sikert kívánunk a további álláskereséséhez!</p>
         <br>
         <p>Üdvözlettel,<br><strong>Strem Tamás</strong><br>Területi Igazgató<br><em>Alfa Vienna Insurance Group – Győri Régió</em></p>
@@ -454,7 +454,6 @@ if menu == "Saját Leadek / Dashboard":
   conn.close()
 
   if not df.empty:
-    # Címeinek magyarosítása a megjelenítéshez
     df_display = df.rename(
         columns={
             "id": "ID",
@@ -623,7 +622,7 @@ elif menu == "📥 Toborzási Form Kiértékelés":
     process_form_evaluations()
 
 elif menu == "Felhasználók Kezelése (Jogosultságok)":
-  st.title("👥 Felhasználók & Belépési Jogosultságok")
+  st.title("👥 Felhasználók Kezelése & Jogosultságok")
 
   if current_user["role"] not in ["Igazgató", "Asszisztens"]:
     st.error("Csak az Igazgató és az Asszisztens kezelheti a felhasználókat.")
@@ -635,7 +634,8 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
   df_users = pd.read_sql_query(
       """
         SELECT u.id AS "ID", u.name AS "Név", u.username AS "Felhasználónév (Email)", 
-               u.role AS "Szerepkör", m.name AS "Felettes Manager"
+               u.role AS "Szerepkör", m.name AS "Felettes Manager",
+               CASE WHEN u.is_active = 1 THEN 'Aktív' ELSE 'Inaktív' END AS "Státusz"
         FROM users u
         LEFT JOIN users m ON u.manager_id = m.id
         ORDER BY u.id ASC
@@ -651,7 +651,100 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
 
   st.divider()
 
-  # 2. ÚJ MUNKATÁRS HOZZÁADÁSA
+  # 2. MEGLÉVŐ MUNKATÁRS ADATAINAK MÓDOSÍTÁSA (ÚJ FUNKCIÓ)
+  st.subheader("✏️ Munkatárs Adatainak Módosítása")
+
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("SELECT * FROM users ORDER BY id ASC")
+  all_users = cursor.fetchall()
+
+  # Kiválasztható felettesek
+  cursor.execute(
+      "SELECT id, name, role FROM users WHERE role IN ('Igazgató', 'Manager')"
+  )
+  managers = cursor.fetchall()
+  conn.close()
+
+  manager_opts = {m["id"]: f"{m['name']} ({m['role']})" for m in managers}
+  manager_opts[None] = "Nincs (Főigazgató alá tartozik)"
+
+  user_opts = {
+      u["id"]: f"{u['name']} ({u['username']}) - {u['role']}" for u in all_users
+  }
+
+  if user_opts:
+    selected_edit_id = st.selectbox(
+        "Válaszd ki a módosítandó munkatársat:", options=list(user_opts.keys())
+    )
+
+    # Megkeressük a kiválasztott user meglévő adatait
+    selected_user = next((u for u in all_users if u["id"] == selected_edit_id), None)
+
+    if selected_user:
+      with st.form("edit_user_form"):
+        edit_name = st.text_input("Teljes Név", value=selected_user["name"])
+        edit_username = st.text_input(
+            "Felhasználónév (E-mail)", value=selected_user["username"]
+        )
+
+        roles = ["Manager", "Tanácsadó", "Asszisztens", "Igazgató"]
+        edit_role = st.selectbox(
+            "Szerepkör",
+            options=roles,
+            index=roles.index(selected_user["role"])
+            if selected_user["role"] in roles
+            else 1,
+        )
+
+        current_mgr = selected_user["manager_id"]
+        edit_manager = st.selectbox(
+            "Felettes Manager / Igazgató:",
+            options=list(manager_opts.keys()),
+            index=list(manager_opts.keys()).index(current_mgr)
+            if current_mgr in manager_opts
+            else list(manager_opts.keys()).index(None),
+            format_func=lambda x: manager_opts[x],
+        )
+
+        edit_active = st.checkbox(
+            "Aktív felhasználó (Beléphet a rendszerbe)",
+            value=bool(selected_user["is_active"]),
+        )
+
+        submit_edit = st.form_submit_button(
+            "Módosítások Mentése", type="primary"
+        )
+
+        if submit_edit:
+          try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                            UPDATE users 
+                            SET name = ?, username = ?, role = ?, manager_id = ?, is_active = ?
+                            WHERE id = ?
+                        """,
+                (
+                    edit_name.strip(),
+                    edit_username.strip(),
+                    edit_role,
+                    edit_manager,
+                    1 if edit_active else 0,
+                    selected_edit_id,
+                ),
+            )
+            conn.commit()
+            conn.close()
+            st.success(f"Munkatárs adatai sikeresen frissítve: {edit_name}")
+            st.rerun()
+          except Exception as e:
+            st.error(f"Hiba a frissítés során: {e}")
+
+  st.divider()
+
+  # 3. ÚJ MUNKATÁRS HOZZÁADÁSA
   st.subheader("➕ Új Munkatárs Hozzáadása")
   with st.form("add_user_form"):
     new_username = st.text_input("Felhasználónév (E-mail)")
@@ -661,22 +754,11 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
         "Szerepkör", ["Manager", "Tanácsadó", "Asszisztens"]
     )
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, name, role FROM users WHERE role IN ('Igazgató',"
-        " 'Manager')"
-    )
-    managers = cursor.fetchall()
-    conn.close()
-
-    manager_opts = {m["id"]: f"{m['name']} ({m['role']})" for m in managers}
-    manager_opts[None] = "Nincs (Főigazgató alá tartozik)"
-
     selected_manager = st.selectbox(
         "Felettes Manager / Igazgató:",
         options=list(manager_opts.keys()),
         format_func=lambda x: manager_opts[x],
+        key="new_user_mgr",
     )
 
     if st.form_submit_button("Felhasználó Létrehozása", type="primary"):
