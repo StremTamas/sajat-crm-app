@@ -454,7 +454,24 @@ if menu == "Saját Leadek / Dashboard":
   conn.close()
 
   if not df.empty:
-    st.dataframe(df, use_container_width=True)
+    # Címeinek magyarosítása a megjelenítéshez
+    df_display = df.rename(
+        columns={
+            "id": "ID",
+            "client_name": "Ügyfél / Cégnév",
+            "phone": "Telefonszám",
+            "email": "E-mail cím",
+            "address": "Cím",
+            "contact_person": "Kapcsolattartó",
+            "source": "Forrás",
+            "status": "Státusz / Visszajelzés",
+            "assigned_manager_id": "Manager ID",
+            "assigned_advisor_id": "Tanácsadó ID",
+            "created_at": "Létrehozva",
+            "notes": "Munkatárs Megjegyzése",
+        }
+    )
+    st.dataframe(df_display, use_container_width=True)
 
     st.divider()
     st.subheader("📝 Lead Státusz & Visszajelzés Frissítése")
@@ -518,7 +535,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
   )
   leads = cursor.fetchall()
 
-  # AZ ÖSSZES MUNKATÁRS LEKÉRDEZÉSE (Beleértve az Igazgatót és Asszisztenst is a visszavételhez!)
   cursor.execute("SELECT id, name, role FROM users WHERE is_active = 1")
   staff = cursor.fetchall()
   conn.close()
@@ -538,7 +554,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
       staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
       staff_options[None] = "-- Nincs kiosztva / Visszavéve --"
 
-      # Beállítjuk az aktuális felelőst alapértelmezettnek
       current_assigned = l["assigned_advisor_id"]
 
       selected_staff = st.selectbox(
@@ -619,7 +634,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
   conn = get_db_connection()
   df_users = pd.read_sql_query(
       """
-        SELECT u.id, u.name AS "Név", u.username AS "Felhasználónév (Email)", 
+        SELECT u.id AS "ID", u.name AS "Név", u.username AS "Felhasználónév (Email)", 
                u.role AS "Szerepkör", m.name AS "Felettes Manager"
         FROM users u
         LEFT JOIN users m ON u.manager_id = m.id
