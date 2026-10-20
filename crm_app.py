@@ -329,7 +329,7 @@ def process_form_evaluations():
 
 
 # ==========================================
-# 4. BEJELENTKEZÉS ÉS MENTÉS
+# 4. BEJELENTKEZÉS ÉS OLDALSÁV
 # ==========================================
 if "user" not in st.session_state:
   st.session_state["user"] = None
@@ -490,61 +490,3 @@ elif menu == "Új Lead Feltöltés":
     address = st.text_input("Cím / Székhely")
     source = st.selectbox(
         "Forrás",
-        [
-            "Promobox Kampány",
-            "Vállalkozói Felmérés",
-            "Ügyfélklub",
-            "Évfordulós Felülvizsgálat",
-            "Személyes Ajánlás",
-        ],
-    )
-    submitted = st.form_submit_button("Lead Rögzítése")
-
-    if submitted and client_name:
-      conn = get_db_connection()
-      cursor = conn.cursor()
-      cursor.execute(
-          """
-                INSERT INTO leads (client_name, phone, email, address, source, status)
-                VALUES (?, ?, ?, ?, ?, 'Új')
-            """,
-          (client_name, phone, email, address, source),
-      )
-      conn.commit()
-      conn.close()
-      st.success("Új lead sikeresen rögzítve!")
-
-elif menu == "📥 Toborzási Form Kiértékelés":
-  st.title("📋 Toborzási Kérdőív Kiértékelés")
-  st.write(
-      "Kattints az alábbi gombra a beérkezett Google Form válaszok manuális"
-      " kiértékeléséhez és a visszajelző levelek kiküldéséhez:"
-  )
-
-  if st.button("📥 Form válaszok kiértékelése", type="primary"):
-    process_form_evaluations()
-
-elif menu == "Felhasználók Kezelése (Jogosultságok)":
-  st.title("👥 Felhasználók & Belépési Jogosultságok")
-
-  if current_user["role"] != "Igazgató":
-    st.error("Csak az Igazgató kezelheti a felhasználókat.")
-    st.stop()
-
-  # 1. MEGLÉVŐ FELHASZNÁLÓK LISTÁJA
-  st.subheader("📋 Rendszerben lévő munkatársak")
-  conn = get_db_connection()
-  df_users = pd.read_sql_query(
-      """
-        SELECT u.id, u.name AS "Név", u.username AS "Felhasználónév (Email)", 
-               u.role AS "Szerepkör", m.name AS "Felettes Manager"
-        FROM users u
-        LEFT JOIN users m ON u.manager_id = m.id
-        ORDER BY u.id ASC
-    """,
-      conn,
-  )
-  conn.close()
-
-  if not df_users.empty:
-    st.dataframe(df
