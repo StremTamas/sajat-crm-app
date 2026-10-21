@@ -157,7 +157,7 @@ def get_gspread_client():
   return gspread.authorize(creds)
 
 
-def sync_google_sheets_to_crm():
+def def sync_google_sheets_to_crm():
   try:
     client = get_gspread_client()
     conn = get_db_connection()
@@ -169,8 +169,15 @@ def sync_google_sheets_to_crm():
         sheet = client.open_by_key(src["id"]).worksheet(src["worksheet"])
         records = sheet.get_all_records()
 
+        if not records:
+          st.sidebar.warning(
+              f"⚠️ A '{src['worksheet']}' munkalap üres vagy nem olvasható!"
+          )
+
         for row in records:
           r = {str(k).strip(): str(v).strip() for k, v in row.items()}
+
+          # Oszlopnevek kinyerése
           email = r.get(
               "E-mail cím", r.get("Email", r.get("Ügyfél_Email", ""))
           )
@@ -187,73 +194,38 @@ def sync_google_sheets_to_crm():
               "Kapcsolattartó neve", r.get("Kapcsolattartó", "")
           )
 
-          extracted_info = []
-          for key, val in r.items():
-            key_lower = key.lower()
-            if val and key not in [
-                "E-mail cím",
-                "Email",
-                "Ügyfél_Email",
-                "Cégnév",
-                "Név",
-                "Ügyfél_Neve",
-                "Telefonszám",
-                "Ügyfél_Telefonszám",
-                "Székhely / Cím",
-                "Ügyfél_Címe",
-                "Időbélyeg",
-                "Timestamp",
-            ]:
-              if any(
-                  k_word in key_lower
-                  for k_word in [
-                      "biztosítás",
-                      "igény",
-                      "érdekel",
-                      "megjegyzés",
-                      "típus",
-                      "válasz",
-                      "szándék",
-                  ]
-              ):
-                extracted_info.append(f"{key}: {val}")
-
-          auto_notes = (
-              " | ".join(extracted_info)
-              if extracted_info
-              else "Automatikus beolvasás"
-          )
-
-          if email and nev:
-            cursor.execute(
-                "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
-                " client_name != '')",
-                (email, nev),
+          # HA HIÁNYZIK A NÉV VAGY EMAIL, FIGYELMEZTETÉST DOB:
+          if not email or not nev:
+            st.sidebar.error(
+                f"❌ Sor kihagyva! Név: '{nev}' | Email: '{email}'. Ellenőrizd"
+                " az oszlopfejléceket a Sheetben!"
             )
-            if not cursor.fetchone():
-              cursor.execute(
-                  """
-                                INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
-                                VALUES (?, ?, ?, ?, ?, ?, 'Új', ?)
-                            """,
-                  (
-                      nev,
-                      phone,
-                      email,
-                      cim,
-                      kapcsolattarto,
-                      src["name"],
-                      auto_notes,
-                  ),
-              )
-              new_leads_count += 1
-      except Exception:
+            continue
+
+          cursor.execute(
+              "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
+              " client_name != '')",
+              (email, nev),
+          )
+          if not cursor.fetchone():
+            cursor.execute(
+                """
+                            INSERT INTO leads (client_name, phone, email, address, contact_person, source, status)
+                            VALUES (?, ?, ?, ?, ?, ?, 'Új')
+                        """,
+                (nev, phone, email, cim, kapcsolattarto, src["name"]),
+            )
+            new_leads_count += 1
+
+      except Exception as err:
+        st.sidebar.error(f"❌ Munkalap hiba ({src['name']}): {err}")
         continue
 
     conn.commit()
     conn.close()
     return new_leads_count
-  except Exception:
+  except Exception as e:
+    st.sidebar.error(f"❌ Általános szinkron hiba: {e}")
     return 0
 
 
