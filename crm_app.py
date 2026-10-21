@@ -125,20 +125,13 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. HITELESÍTÉS ÉS OKOS GOOGLE SHEETS SZINKRON (DIAGNOSZTIKÁVAL)
+# 2. HITELESÍTÉS ÉS SZIGORÚAN CSAK A VÁLLALKOZÓI FELMÉRÉS BEOLVASÁSA
 # ==========================================
-SHEET_SOURCES = [
-    {
-        "name": "Vállalkozói Felmérés (Válaszadók)",
-        "id": "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis",
-        "worksheet": "Munkalap1",
-    },
-    {
-        "name": "Ügyfélklub Regisztráltak",
-        "id": "1kIdVrApf2VQgQTV3VuZpMNaXYCYu_RvowvPCC54SK-c",
-        "worksheet": "Munkalap1",
-    },
-]
+SHEET_SOURCES = [{
+    "name": "Vállalkozói Felmérés (Válaszadók)",
+    "id": "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis",
+    "worksheet": "Munkalap1",
+}]
 
 
 def get_gspread_client():
@@ -167,92 +160,68 @@ def sync_google_sheets_to_crm():
     for src in SHEET_SOURCES:
       try:
         sheet = client.open_by_key(src["id"]).worksheet(src["worksheet"])
-        records = sheet.get_all_records()
+        all_rows = sheet.get_all_values()
 
-        st.sidebar.info(
-            f"📊 {src['name']}: {len(records)} sor beolvasva a Sheetből."
-        )
+        if len(all_rows) < 2:
+          continue
 
-        for i, row in enumerate(records, start=2):
-          r = {str(k).strip(): str(v).strip() for k, v in row.items()}
+        headers = [str(h).strip() for h in all_rows[0]]
 
-          nev = (
-              r.get("Cégnév")
-              or r.get("Név")
-              or r.get("Kapcsolattartó neve")
-              or r.get("Kapcsolattartó")
-              or ""
+        for i, row_values in enumerate(all_rows[1:], start=2):
+          r = {}
+          for idx, h in enumerate(headers):
+            val = str(row_values[idx]).strip() if idx < len(row_values) else ""
+            r[h] = val
+
+          nev = r.get("Cégnév", "")
+          email = r.get("E-mail cím", "")
+          phone = r.get("Telefonszám", "")
+          letszam = r.get("Hány munkavállalót foglalkoztat a cég?", "")
+          teruletek = r.get(
+              "Milyen területeken látna szívesen díjmentes szakértői auditot,"
+              " tájékoztatást vagy segítséget?",
+              "",
           )
-          email = (
-              r.get("E-mail cím")
-              or r.get("Email")
-              or r.get("Email cím")
-              or r.get("Ügyfél_Email")
-              or ""
-          )
-          phone = (
-              r.get("Telefonszám")
-              or r.get("Ügyfél_Telefonszám")
-              or r.get("Tel")
-              or ""
-          )
-          cim = (
-              r.get("Székhely / Cím")
-              or r.get("Cím")
-              or r.get("Ügyfél_Címe")
-              or ""
+          megjegyzes = r.get(
+              "Megjegyzés, egyedi kérdés vagy segítségkérés", ""
           )
 
-          if not email or not nev:
-            st.sidebar.warning(
-                f"⚠️ Sor {i} kihagyva (hiányzó név/email): Név='{nev}',"
-                f" Email='{email}'"
-            )
+          if not email and not nev:
             continue
 
-          # Ellenőrizzük, szerepel-e már az adatbázisban
+          if not nev and email:
+            nev = email.split("@")[0].capitalize()
+
+          # Ellenőrizzük az adatbázisban a meglétét
           cursor.execute(
-              "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
-              " client_name != '')",
+              "SELECT id FROM leads WHERE email = ? AND client_name = ?",
               (email, nev),
           )
           existing = cursor.fetchone()
 
-          if existing:
-            st.sidebar.caption(
-                f"ℹ️ Sor {i} már létezik a CRM-ben ({nev} - {email})"
-            )
-          else:
-            extracted_info = []
-            for key, val in r.items():
-              k_lower = key.lower()
-              if val and not any(
-                  skip in k_lower
-                  for skip in ["időbélyeg", "timestamp", "feldolgozva"]
-              ):
-                if key not in [
-                    "Cégnév",
-                    "E-mail cím",
-                    "Telefonszám",
-                    "Székhely / Cím",
-                ]:
-                  extracted_info.append(f"{key}: {val}")
+          if not existing:
+            notes_parts = []
+            if letszam:
+              notes_parts.append(f"Létszám: {letszam}")
+            if teruletek:
+              notes_parts.append(f"Igényelt audit: {teruletek}")
+            if megjegyzes:
+              notes_parts.append(f"Megjegyzés: {megjegyzes}")
 
             auto_notes = (
-                " | ".join(extracted_info)
-                if extracted_info
-                else "Automatikus beolvasás"
+                " | ".join(notes_parts)
+                if notes_parts
+                else "Vállalkozói Felmérés kitöltő"
             )
 
             cursor.execute(
                 """
                             INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
-                            VALUES (?, ?, ?, ?, ?, ?, 'Új', ?)
+                            VALUES (?, ?, ?, '', ?, ?, 'Új', ?)
                         """,
-                (nev, phone, email, cim, nev, src["name"], auto_notes),
+                (nev, phone, email, nev, src["name"], auto_notes),
             )
             new_leads_count += 1
-            st.sidebar.success(f"✅ Új lead rögzítve: {nev} ({email})")
 
       except Exception as err:
         st.sidebar.error(f"❌ Hiba ({src['name']}): {err}")
@@ -590,7 +559,6 @@ if menu == "Saját Leadek / Dashboard":
 
     filtered_df = df.copy()
 
-    # KIS- ÉS NAGYBETŰ FÜGGETLEN KERESÉS
     if search_term.strip():
       term = search_term.strip().lower()
       filtered_df = filtered_df[
