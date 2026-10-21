@@ -166,7 +166,17 @@ def sync_google_sheets_to_crm():
 
     for src in SHEET_SOURCES:
       try:
-        sheet = client.open_by_key(src["id"]).worksheet(src["worksheet"])
+        sheet_obj = client.open_by_key(src["id"])
+        available_sheets = [s.title for s in sheet_obj.worksheets()]
+
+        if src["worksheet"] not in available_sheets:
+          st.sidebar.error(
+              f"❌ Munkalap hiba ({src['name']}): '{src['worksheet']}' nem"
+              f" található! Elérhető fülek a táblázatban: {available_sheets}"
+          )
+          continue
+
+        sheet = sheet_obj.worksheet(src["worksheet"])
         records = sheet.get_all_records()
 
         if not records:
