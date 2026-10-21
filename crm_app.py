@@ -136,7 +136,7 @@ SHEET_SOURCES = [
     {
         "name": "Ügyfélklub Regisztráltak",
         "id": "1kIdVrApf2VQgQTV3VuZpMNaXYCYu_RvowvPCC54SK-c",
-        "worksheet": "Munka1",
+        "worksheet": "Munkalap1",
     },
 ]
 
@@ -166,23 +166,8 @@ def sync_google_sheets_to_crm():
 
     for src in SHEET_SOURCES:
       try:
-        sheet_obj = client.open_by_key(src["id"])
-        available_sheets = [s.title for s in sheet_obj.worksheets()]
-
-        if src["worksheet"] not in available_sheets:
-          st.sidebar.error(
-              f"❌ Munkalap hiba ({src['name']}): '{src['worksheet']}' nem"
-              f" található! Elérhető fülek a táblázatban: {available_sheets}"
-          )
-          continue
-
-        sheet = sheet_obj.worksheet(src["worksheet"])
+        sheet = client.open_by_key(src["id"]).worksheet(src["worksheet"])
         records = sheet.get_all_records()
-
-        if not records:
-          st.sidebar.warning(
-              f"⚠️ A '{src['worksheet']}' munkalap üres vagy nem olvasható!"
-          )
 
         for row in records:
           r = {str(k).strip(): str(v).strip() for k, v in row.items()}
@@ -266,15 +251,13 @@ def sync_google_sheets_to_crm():
             )
             new_leads_count += 1
 
-      except Exception as err:
-        st.sidebar.error(f"❌ Munkalap hiba ({src['name']}): {err}")
+      except Exception:
         continue
 
     conn.commit()
     conn.close()
     return new_leads_count
-  except Exception as e:
-    st.sidebar.error(f"❌ Általános szinkron hiba: {e}")
+  except Exception:
     return 0
 
 
