@@ -124,7 +124,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. HIVATALOS ADATFORRÁSOK (Helyes ID-kkal)
+# 2. HIVATALOS ADATFORRÁSOK 
 # ==========================================
 SHEET_SOURCES = [
     {
@@ -134,8 +134,8 @@ SHEET_SOURCES = [
     {
         "name": "Ügyfél Évfordulók",
         "id": "1mFO7kg_JXVLbzSA2r7_gqRRLqhpXyaiUgvlCg-EoxHY",
-        "condition_col": "válasz",
-        "condition_val": "igen, kérem a felülvizsgálatot",
+        "condition_col": "felülvizsgálat", # Rugalmas szűrés a kérdésre
+        "condition_val": "igen", # Rugalmas szűrés a válaszra
     },
     {
         "name": "VIG B2B Ügyfélklub Adatbázis",
@@ -144,7 +144,7 @@ SHEET_SOURCES = [
     {
         "name": "Promobox ügyfelek",
         "id": "1lvg5SahZ5r9BONF443ZEHj3SIWmxjiNZhbPSU5yj84w",
-        "condition_col": "válasz",
+        "condition_col": "", # Ha üres, bármelyik oszlopban megtalálja a választ
         "condition_val": "igen",
     },
 ]
