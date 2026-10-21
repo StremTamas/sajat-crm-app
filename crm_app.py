@@ -172,52 +172,54 @@ def sync_google_sheets_to_crm():
         for row in records:
           r = {str(k).strip(): str(v).strip() for k, v in row.items()}
 
-          email = r.get(
-              "E-mail cím", r.get("Email", r.get("Ügyfél_Email", ""))
+          # PONTOS OSZLOPFOGALMAZÁSOK RÁILLESZTÉSE
+          nev = (
+              r.get("Cégnév")
+              or r.get("Név")
+              or r.get("Kapcsolattartó neve")
+              or r.get("Kapcsolattartó")
+              or ""
           )
-          nev = r.get(
-              "Cégnév",
-              r.get(
-                  "Név",
-                  r.get("Ügyfél_Neve", r.get("Kapcsolattartó", "")),
-              ),
+          email = (
+              r.get("E-mail cím")
+              or r.get("Email")
+              or r.get("Email cím")
+              or r.get("Ügyfél_Email")
+              or ""
           )
-          phone = r.get("Telefonszám", r.get("Ügyfél_Telefonszám", ""))
-          cim = r.get("Székhely / Cím", r.get("Ügyfél_Címe", ""))
-          kapcsolattarto = r.get(
-              "Kapcsolattartó neve", r.get("Kapcsolattartó", "")
+          phone = (
+              r.get("Telefonszám") or r.get("Ügyfél_Telefonszám") or r.get("Tel") or ""
           )
+          cim = (
+              r.get("Székhely / Cím")
+              or r.get("Cím")
+              or r.get("Ügyfél_Címe")
+              or ""
+          )
+          kapcsolattarto = r.get("Kapcsolattartó neve") or r.get("Kapcsolattartó") or ""
 
+          # PONTOS OSZLOP-KINYERÉS A MEGJEGYZÉS/INFÓ SORBA
           extracted_info = []
-          for key, val in r.items():
-            key_lower = key.lower()
-            if val and key not in [
-                "E-mail cím",
-                "Email",
-                "Ügyfél_Email",
-                "Cégnév",
-                "Név",
-                "Ügyfél_Neve",
-                "Telefonszám",
-                "Ügyfél_Telefonszám",
-                "Székhely / Cím",
-                "Ügyfél_Címe",
-                "Időbélyeg",
-                "Timestamp",
-            ]:
-              if any(
-                  k_word in key_lower
-                  for k_word in [
-                      "biztosítás",
-                      "igény",
-                      "érdekel",
-                      "megjegyzés",
-                      "típus",
-                      "válasz",
-                      "szándék",
-                  ]
-              ):
-                extracted_info.append(f"{key}: {val}")
+
+          m_f = r.get("Hány munkavállalót foglalkoztat a cég?")
+          if m_f:
+            extracted_info.append(f"Munkavállalók: {m_f}")
+
+          teruletek = r.get(
+              "Mylien területeken látna szívesen díjmentes szakértői auditot,"
+              " tájékoztatást vagy segítséget?"
+          ) or r.get(
+              "Milyen területeken látna szívesen díjmentes szakértői auditot,"
+              " tájékoztatást vagy segítséget?"
+          )
+          if teruletek:
+            extracted_info.append(f"Igényelt terület: {teruletek}")
+
+          megj = r.get("Megjegyzés, egyedi kérdés vagy segítségkérés") or r.get(
+              "Megjegyzés"
+          )
+          if megj:
+            extracted_info.append(f"Megjegyzés: {megj}")
 
           auto_notes = (
               " | ".join(extracted_info)
@@ -588,10 +590,22 @@ if menu == "Saját Leadek / Dashboard":
     if search_term.strip():
       term = search_term.strip().lower()
       filtered_df = filtered_df[
-          filtered_df["client_name"].str.lower().str.contains(term, na=False)
-          | filtered_df["email"].str.lower().str.contains(term, na=False)
-          | filtered_df["phone"].str.lower().str.contains(term, na=False)
-          | filtered_df["notes"].str.lower().str.contains(term, na=False)
+          filtered_df["client_name"]
+          .astype(str)
+          .str.lower()
+          .str.contains(term, na=False)
+          | filtered_df["email"]
+          .astype(str)
+          .str.lower()
+          .str.contains(term, na=False)
+          | filtered_df["phone"]
+          .astype(str)
+          .str.lower()
+          .str.contains(term, na=False)
+          | filtered_df["notes"]
+          .astype(str)
+          .str.lower()
+          .str.contains(term, na=False)
       ]
 
     if selected_source != "Összes forrás":
