@@ -125,17 +125,17 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. HIVATALOS ADATFORRÁSOK KIZÁRÓLAG
+# 2. HELYES VÁLLALKOZÓI IGÉNYFELMÉRŐ Google Sheet ADATFORRÁSOK
 # ==========================================
 SHEET_SOURCES = [
     {
-        "name": "Vállalkozói Felmérés Válaszok",
+        "name": "Vállalkozói Igényfelmérés Válaszok",
         "id": "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis",
         "worksheet": "Munkalap1",
     },
     {
         "name": "VIG B2B Ügyfélklub Adatbázis",
-        "id": "1kIdVrApf2VQgQTV3VuZpMNaXYCYu_RvowvPCC54SK-c",
+        "id": "1N0Lc-F5mNds7oqcrpjTXOazwrcRlBasbuVkVsG28B2k",
         "worksheet": "Munkalap1",
     },
 ]
@@ -191,13 +191,15 @@ def sync_google_sheets_to_crm():
               email = v
             elif not phone and ("telefon" in k or "tel" in k or "mobil" in k):
               phone = v
-            elif not nev and ("cégnév" in k or "név" in k or "cég" in k):
+            elif not nev and (
+                "cégnév" in k or "név" in k or "cég" in k or "kapcsolattartó" in k
+            ):
               nev = v
             elif "feldolgozva" in k:
               feldolgozva = v.upper()
 
-          # SZŰRÉS: Ha már fel van dolgozva ("OK"), átlépjük!
-          if feldolgozva == "OK":
+          # AMENNYIBEN A "FELDOLGOZVA" OSZLOPBAN "OK" VAGY "IGEN" VAN, ÁTLÉPJÜK
+          if feldolgozva in ["OK", "IGEN", "FELDOLGOZVA"]:
             continue
 
           if not email and not nev:
@@ -206,7 +208,6 @@ def sync_google_sheets_to_crm():
           if not nev and email:
             nev = email.split("@")[0].capitalize()
 
-          # Megjegyzés készítése
           for k, v in r.items():
             if v and not any(
                 skip in k
@@ -223,7 +224,7 @@ def sync_google_sheets_to_crm():
             ):
               extracted_info.append(f"{v}")
 
-          # Duplikáció ellenőrzése az adatbázisban
+          # Duplikáció kiszűrése az adatbázisból
           cursor.execute(
               "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
               " client_name != '')",
@@ -235,7 +236,7 @@ def sync_google_sheets_to_crm():
             auto_notes = (
                 " | ".join(extracted_info)
                 if extracted_info
-                else "Beérkezett kitöltő"
+                else "Beérkezett igényfelmérés kitöltő"
             )
 
             cursor.execute(
