@@ -115,7 +115,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. HITELESÍTÉS ÉS GOOGLE SHEETS SZINKRON
+# 2. HITELESÍTÉS ÉS OKOS GOOGLE SHEETS SZINKRON
 # ==========================================
 SHEET_SOURCES = [
     {
@@ -148,6 +148,7 @@ def get_gspread_client():
 
 
 def sync_google_sheets_to_crm():
+  """Átemeli az ügyfeleket ÉS automatikusan kinyeri a válaszokat/megjegyzéseket az infó sorba."""
   try:
     client = get_gspread_client()
     conn = get_db_connection()
@@ -177,6 +178,44 @@ def sync_google_sheets_to_crm():
               "Kapcsolattartó neve", r.get("Kapcsolattartó", "")
           )
 
+          # EXTRA INFÓ/MEGJEGYZÉS AUTOMATIKUS KINYERÉSE
+          extracted_info = []
+          for key, val in r.items():
+            key_lower = key.lower()
+            if val and key not in [
+                "E-mail cím",
+                "Email",
+                "Ügyfél_Email",
+                "Cégnév",
+                "Név",
+                "Ügyfél_Neve",
+                "Telefonszám",
+                "Ügyfél_Telefonszám",
+                "Székhely / Cím",
+                "Ügyfél_Címe",
+                "Időbélyeg",
+                "Timestamp",
+            ]:
+              if any(
+                  k_word in key_lower
+                  for k_word in [
+                      "biztosítás",
+                      "igény",
+                      "érdekel",
+                      "megjegyzés",
+                      "típus",
+                      "válasz",
+                      "szándék",
+                  ]
+              ):
+                extracted_info.append(f"{key}: {val}")
+
+          auto_notes = (
+              " | ".join(extracted_info)
+              if extracted_info
+              else "Automatikus beolvasás"
+          )
+
           if email and nev:
             cursor.execute(
                 "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
@@ -186,10 +225,18 @@ def sync_google_sheets_to_crm():
             if not cursor.fetchone():
               cursor.execute(
                   """
-                                INSERT INTO leads (client_name, phone, email, address, contact_person, source, status)
-                                VALUES (?, ?, ?, ?, ?, ?, 'Új')
+                                INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
+                                VALUES (?, ?, ?, ?, ?, ?, 'Új', ?)
                             """,
-                  (nev, phone, email, cim, kapcsolattarto, src["name"]),
+                  (
+                      nev,
+                      phone,
+                      email,
+                      cim,
+                      kapcsolattarto,
+                      src["name"],
+                      auto_notes,
+                  ),
               )
               new_leads_count += 1
       except Exception:
@@ -391,7 +438,18 @@ if not st.session_state["user"]:
 current_user = st.session_state["user"]
 
 st.sidebar.title(f"👤 {current_user['name']}")
-st.sidebar.caption(f"Szerepkör: {current_user['role']}")
+
+# ASSZISZTENS NÉZETVÁLTÓ (Nézet: Asszisztens vs Tanácsadó)
+active_role_view = current_user["role"]
+if current_user["role"] == "Asszisztens":
+  active_role_view = st.sidebar.selectbox(
+      "🔄 Aktív Nézet:",
+      options=["Asszisztens (Összes lead)", "Tanácsadó (Saját leadek)"],
+      index=0,
+  )
+  st.sidebar.caption(f"Eredeti szerepkör: {current_user['role']}")
+else:
+  st.sidebar.caption(f"Szerepkör: {current_user['role']}")
 
 if st.sidebar.button("🔄 Élő Google Sheets Szinkronizálás"):
   count = sync_google_sheets_to_crm()
@@ -430,7 +488,11 @@ if menu == "Saját Leadek / Dashboard":
   st.title("📊 Saját Leadek és Visszajelzések")
   conn = get_db_connection()
 
-  if current_user["role"] in ["Igazgató", "Asszisztens"]:
+  # Lekérdezés logika a kiválasztott nézet alapján
+  if current_user["role"] == "Igazgató" or (
+      current_user["role"] == "Asszisztens"
+      and "Összes lead" in active_role_view
+  ):
     query = "SELECT * FROM leads ORDER BY id DESC"
     params = ()
   elif current_user["role"] == "Manager":
@@ -442,6 +504,7 @@ if menu == "Saját Leadek / Dashboard":
         """
     params = (current_user["id"], current_user["id"])
   else:
+    # Tanácsadó nézet (vagy Asszisztens Tanácsadó módban)
     query = (
         "SELECT * FROM leads WHERE assigned_advisor_id = ? ORDER BY id DESC"
     )
@@ -451,7 +514,6 @@ if menu == "Saját Leadek / Dashboard":
   conn.close()
 
   if not df.empty:
-    # 🔍 SZŰRŐK ÉS LAPOZÁS BEÁLLÍTÁSA A DASHBOARDON
     f_col1, f_col2, f_col3 = st.columns([2, 2, 1])
 
     with f_col1:
@@ -473,14 +535,12 @@ if menu == "Saját Leadek / Dashboard":
     with f_col3:
       page_size = st.selectbox("📄 Megjelenítés:", [20, 50, 100], index=0)
 
-    # Szűrések alkalmazása
     filtered_df = df.copy()
     if selected_source != "Összes forrás":
       filtered_df = filtered_df[filtered_df["source"] == selected_source]
     if selected_status != "Összes státusz":
       filtered_df = filtered_df[filtered_df["status"] == selected_status]
 
-    # Lapozás kiszámítása
     total_items = len(filtered_df)
     total_pages = max(1, math.ceil(total_items / page_size))
 
@@ -498,7 +558,6 @@ if menu == "Saját Leadek / Dashboard":
     end_idx = start_idx + page_size
     paged_df = filtered_df.iloc[start_idx:end_idx]
 
-    # Megjelenítés
     df_display = paged_df.rename(
         columns={
             "id": "ID",
@@ -512,7 +571,7 @@ if menu == "Saját Leadek / Dashboard":
             "assigned_manager_id": "Manager ID",
             "assigned_advisor_id": "Tanácsadó ID",
             "created_at": "Létrehozva",
-            "notes": "Munkatárs Megjegyzése",
+            "notes": "Infó / Munkatárs Megjegyzése",
         }
     )
     st.caption(
@@ -528,14 +587,18 @@ if menu == "Saját Leadek / Dashboard":
     with col1:
       lead_opts = {
           row["id"]: (
-              f"{row['client_name']} ({row['source']}) - Jelenlegi status:"
+              f"{row['client_name']} ({row['source']}) - Status:"
               f" {row['status']}"
           )
           for _, row in filtered_df.iterrows()
       }
-      selected_lead_id = st.selectbox(
-          "Válassz leadet a frissítéshez:", options=list(lead_opts.keys())
-      ) if lead_opts else None
+      selected_lead_id = (
+          st.selectbox(
+              "Válassz leadet a frissítéshez:", options=list(lead_opts.keys())
+          )
+          if lead_opts
+          else None
+      )
 
     with col2:
       new_status = st.selectbox(
@@ -551,7 +614,7 @@ if menu == "Saját Leadek / Dashboard":
       )
 
     with col3:
-      new_note = st.text_input("Megjegyzés / Visszajelzés:")
+      new_note = st.text_input("Megjegyzés / Tárgyalási infó:")
 
     if st.button("Visszajelzés Mentése", type="primary") and selected_lead_id:
       conn = get_db_connection()
@@ -589,7 +652,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
   staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
   staff_options[None] = "-- Nincs kiosztva / Visszavéve --"
 
-  # 🔍 SZŰRÉS A KIOSZTÁS FELÜLETEN IS
   all_sources = ["Összes forrás"] + sorted(
       list(set([l["source"] for l in leads if l["source"]]))
   )
@@ -604,7 +666,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
         "📄 Oldalméret:", [20, 50, 100], index=0, key="k_page_size"
     )
 
-  # Szűrt leadek
   if filter_source != "Összes forrás":
     filtered_leads = [l for l in leads if l["source"] == filter_source]
   else:
@@ -631,8 +692,8 @@ elif menu == "Lead Kiosztás & Visszavétel":
     )
     for l in filtered_leads:
       is_checked = st.checkbox(
-          f"[{l['source']}] {l['client_name']} ({l['email']}) — Jelenleg:"
-          f" {l['status']}",
+          f"[{l['source']}] {l['client_name']} ({l['email']}) — Infó:"
+          f" {l['notes'] if l['notes'] else 'Nincs'} — Status: {l['status']}",
           key=f"chk_{l['id']}",
       )
       if is_checked:
@@ -666,7 +727,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
   with tab2:
     st.subheader("📝 Leadek Egyenkénti Kezelése")
 
-    # Lapozás az egyedi listánál
     k_total_pages = max(1, math.ceil(len(filtered_leads) / kiosztas_page_size))
     k_page = st.number_input(
         f"Oldal (1 - {k_total_pages}):",
@@ -688,8 +748,8 @@ elif menu == "Lead Kiosztás & Visszavétel":
             f"**{l['client_name']}** ({l['source']}) - Status: `{l['status']}`"
         )
         st.caption(
-            f"E-mail: {l['email']} | Tel: {l['phone']} | Megjegyzés:"
-            f" {l['notes'] if l['notes'] else 'Nincs'}"
+            f"E-mail: {l['email']} | Tel: {l['phone']}\n\n**Infó /"
+            f" Megjegyzés:** {l['notes'] if l['notes'] else 'Nincs'}"
         )
       with col2:
         current_assigned = l["assigned_advisor_id"]
@@ -743,6 +803,11 @@ elif menu == "Új Lead Feltöltés":
         placeholder="pl. Szeptemberi Networking Est, Facebook hirdetés stb.",
     )
 
+    manual_note = st.text_area(
+        "Kezdeti megjegyzés / Igényelt biztosítás típusa:",
+        placeholder="pl. Flotta biztosítás iránt érdeklődik, jövő héten hívható.",
+    )
+
     submitted = st.form_submit_button("Lead Rögzítése", type="primary")
 
     if submitted and client_name:
@@ -758,10 +823,17 @@ elif menu == "Új Lead Feltöltés":
       cursor = conn.cursor()
       cursor.execute(
           """
-                INSERT INTO leads (client_name, phone, email, address, source, status)
-                VALUES (?, ?, ?, ?, ?, 'Új')
+                INSERT INTO leads (client_name, phone, email, address, source, status, notes)
+                VALUES (?, ?, ?, ?, ?, 'Új', ?)
             """,
-          (client_name, phone, email, address, final_source),
+          (
+              client_name,
+              phone,
+              email,
+              address,
+              final_source,
+              manual_note.strip(),
+          ),
       )
       conn.commit()
       conn.close()
