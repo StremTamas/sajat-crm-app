@@ -136,7 +136,7 @@ SHEET_SOURCES = [
     {
         "name": "Ügyfélklub Regisztráltak",
         "id": "1kIdVrApf2VQgQTV3VuZpMNaXYCYu_RvowvPCC54SK-c",
-        "worksheet": "Ügyfélklub Tagok",
+        "worksheet": "Munka1",
     },
 ]
 
@@ -177,7 +177,6 @@ def sync_google_sheets_to_crm():
         for row in records:
           r = {str(k).strip(): str(v).strip() for k, v in row.items()}
 
-          # Oszlopnevek kinyerése
           email = r.get(
               "E-mail cím", r.get("Email", r.get("Ügyfél_Email", ""))
           )
@@ -194,12 +193,44 @@ def sync_google_sheets_to_crm():
               "Kapcsolattartó neve", r.get("Kapcsolattartó", "")
           )
 
-          # HA HIÁNYZIK A NÉV VAGY EMAIL, FIGYELMEZTETÉST DOB:
+          extracted_info = []
+          for key, val in r.items():
+            key_lower = key.lower()
+            if val and key not in [
+                "E-mail cím",
+                "Email",
+                "Ügyfél_Email",
+                "Cégnév",
+                "Név",
+                "Ügyfél_Neve",
+                "Telefonszám",
+                "Ügyfél_Telefonszám",
+                "Székhely / Cím",
+                "Ügyfél_Címe",
+                "Időbélyeg",
+                "Timestamp",
+            ]:
+              if any(
+                  k_word in key_lower
+                  for k_word in [
+                      "biztosítás",
+                      "igény",
+                      "érdekel",
+                      "megjegyzés",
+                      "típus",
+                      "válasz",
+                      "szándék",
+                  ]
+              ):
+                extracted_info.append(f"{key}: {val}")
+
+          auto_notes = (
+              " | ".join(extracted_info)
+              if extracted_info
+              else "Automatikus beolvasás"
+          )
+
           if not email or not nev:
-            st.sidebar.error(
-                f"❌ Sor kihagyva! Név: '{nev}' | Email: '{email}'. Ellenőrizd"
-                " az oszlopfejléceket a Sheetben!"
-            )
             continue
 
           cursor.execute(
@@ -210,10 +241,18 @@ def sync_google_sheets_to_crm():
           if not cursor.fetchone():
             cursor.execute(
                 """
-                            INSERT INTO leads (client_name, phone, email, address, contact_person, source, status)
-                            VALUES (?, ?, ?, ?, ?, ?, 'Új')
+                            INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
+                            VALUES (?, ?, ?, ?, ?, ?, 'Új', ?)
                         """,
-                (nev, phone, email, cim, kapcsolattarto, src["name"]),
+                (
+                    nev,
+                    phone,
+                    email,
+                    cim,
+                    kapcsolattarto,
+                    src["name"],
+                    auto_notes,
+                ),
             )
             new_leads_count += 1
 
@@ -390,8 +429,6 @@ def process_form_evaluations():
 # ==========================================
 if "user" not in st.session_state:
   st.session_state["user"] = None
-if "last_new_leads_count" not in st.session_state:
-  st.session_state["last_new_leads_count"] = 0
 
 if not st.session_state["user"]:
   st.title("💼 Alfa Arrabona CRM – Bejelentkezés")
@@ -434,7 +471,6 @@ else:
 
 if st.sidebar.button("🔄 Élő Google Sheets Szinkronizálás"):
   count = sync_google_sheets_to_crm()
-  st.session_state["last_new_leads_count"] = count
   if count > 0:
     st.sidebar.success(f"{count} új valódi lead beolvasva!")
   else:
@@ -472,7 +508,6 @@ menu = st.sidebar.radio("Navigáció", menu_options)
 if menu == "Saját Leadek / Dashboard":
   st.title("📊 Saját Leadek és Visszajelzések")
 
-  # 💜 LILA/ZÖLD BANNER ÚJ LEAD BEÉRKEZÉSEKOR
   conn = get_db_connection()
   cursor = conn.cursor()
   cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'Új'")
@@ -488,7 +523,6 @@ if menu == "Saját Leadek / Dashboard":
     )
 
   conn = get_db_connection()
-  # ID HELYETT TANÁCSADÓ NEVÉNEK KINYERÉSE (JOIN)
   if current_user["role"] == "Igazgató" or (
       current_user["role"] == "Asszisztens"
       and "Összes lead" in active_role_view
@@ -530,7 +564,6 @@ if menu == "Saját Leadek / Dashboard":
   conn.close()
 
   if not df.empty:
-    # 🔍 KERESŐMEZŐ ÉS SZŰRŐK
     st.subheader("🔍 Szűrők és Keresés")
     s_col1, s_col2, s_col3, s_col4 = st.columns([3, 2, 2, 1])
 
@@ -557,7 +590,6 @@ if menu == "Saját Leadek / Dashboard":
     with s_col4:
       page_size = st.selectbox("Megjelenítés:", [20, 50, 100], index=0)
 
-    # Szűrések végrehajtása
     filtered_df = df.copy()
 
     if search_term.strip():
@@ -574,7 +606,6 @@ if menu == "Saját Leadek / Dashboard":
     if selected_status != "Összes státusz":
       filtered_df = filtered_df[filtered_df["status"] == selected_status]
 
-    # Oldaltörés/Lapozás
     total_items = len(filtered_df)
     total_pages = max(1, math.ceil(total_items / page_size))
 
@@ -608,7 +639,6 @@ if menu == "Saját Leadek / Dashboard":
         }
     )
 
-    # OSZLOP ELEMEK SZŰRÉSE ÉS ÁTRENDEZÉSE
     all_cols = list(df_display.columns)
     with st.expander("👁️ Megjelenítendő Oszlopok kiválasztása"):
       visible_cols = st.multiselect(
