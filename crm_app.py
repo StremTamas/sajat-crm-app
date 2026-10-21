@@ -134,8 +134,8 @@ SHEET_SOURCES = [
     {
         "name": "Ügyfél Évfordulók",
         "id": "1mFO7kg_JXVLbzSA2r7_gqRRLqhpXyaiUgvlCg-EoxHY",
-        "condition_col": "felülvizsgálat", # Rugalmas szűrés a kérdésre
-        "condition_val": "igen", # Rugalmas szűrés a válaszra
+        "condition_col": "felülvizsgálat", 
+        "condition_val": "igen", 
     },
     {
         "name": "VIG B2B Ügyfélklub Adatbázis",
@@ -144,7 +144,7 @@ SHEET_SOURCES = [
     {
         "name": "Promobox ügyfelek",
         "id": "1lvg5SahZ5r9BONF443ZEHj3SIWmxjiNZhbPSU5yj84w",
-        "condition_col": "", # Ha üres, bármelyik oszlopban megtalálja a választ
+        "condition_col": "", 
         "condition_val": "igen",
     },
 ]
@@ -173,7 +173,6 @@ def sync_google_sheets_to_crm():
 
         for src in SHEET_SOURCES:
             try:
-                # Az első munkalapot (sheet1) nyitja meg automatikusan
                 sheet = client.open_by_key(src["id"]).sheet1
                 all_rows = sheet.get_all_values()
 
@@ -188,7 +187,6 @@ def sync_google_sheets_to_crm():
                         val = str(row_values[idx]).strip() if idx < len(row_values) else ""
                         r[h] = val
 
-                    # Szűrési feltételek ellenőrzése
                     if "condition_col" in src:
                         cond_found = False
                         for k, v in r.items():
@@ -209,9 +207,11 @@ def sync_google_sheets_to_crm():
                             email = v
                         elif not phone and ("telefon" in k or "tel" in k or "mobil" in k):
                             phone = v
+                        # Bővítettük a keresést az ékezet nélküli "nev" szóra is, hogy a Promobox-os Ügyfél_Neve is betöltődjön
                         elif not nev and (
                             "cégnév" in k
                             or "név" in k
+                            or "nev" in k  
                             or "cég" in k
                             or "kapcsolattartó" in k
                         ):
