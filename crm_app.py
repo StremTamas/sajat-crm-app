@@ -1,4 +1,5 @@
 import datetime
+import math
 import random
 import smtplib
 import sqlite3
@@ -12,20 +13,18 @@ import pandas as pd
 import streamlit as st
 
 # ==========================================
-# 1. OLDAL BEÁLLÍTÁSAI ÉS JAVÍTOTT CSS STÍLUS
+# 1. OLDAL BEÁLLÍTÁSAI ÉS STÍLUS
 # ==========================================
 st.set_page_config(
     page_title="Alfa Arrabona CRM", page_icon="💼", layout="wide"
 )
 
-# Javított gombkontraszt és olvashatóság
 st.markdown(
     """
     <style>
     .stApp {
         background-color: #f8f9fa;
     }
-    /* Oldalsáv sötét háttérrel és világos gombokkal */
     section[data-testid="stSidebar"] {
         background-color: #1e293b !important;
     }
@@ -41,7 +40,6 @@ st.markdown(
     section[data-testid="stSidebar"] button:hover {
         background-color: #475569 !important;
     }
-    /* Főoldali gombok olvasható fekete/sötétkék betűkkel */
     .main button {
         color: #0f172a !important;
         font-weight: bold !important;
@@ -53,7 +51,6 @@ st.markdown(
 
 DB_FILE = "crm_data_v2.db"
 
-# SMTP Beállítások e-mail küldéshez
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
 SENDER_EMAIL = "arrabonainsurance@gmail.com"
@@ -241,7 +238,7 @@ def get_elutasito_email(nev):
     <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6;">
         <p>Kedves {nev}!</p>
         <p>Köszönjük, hogy időt szánt a kérdőívünk kitöltésére és érdeklődött a győri Alfa VIG karrierlehetőségei iránt.</p>
-        <p>Sajnálattal tájékoztatjuk, hogy a jelenlegi nyitott pozícióinkhoz elengedhetetlen a vállalkozói jogviszony keretében történő együttműködés. Mivel Ön jelzése alapján kizárólag főállású/alkalmazotti jogviszonyban gondolkodik, így jelenleg nem tudjuk továbbléptetni a kiválasztási folyamatban.</p>
+        <p>Sajnálattal tájékoztatjuk, hogy a jelenlegi nyitott pozícióinkhoz elengedhetetlen a vállalkozói jogviszony keretében történő együttműködés. Mivel Ön jelzése alapján kizárólag főállású/alkalmazotti jogviszonyban gondolkodik, így jelenleg nem tudjuk tovabléptetni a kiválasztási folyamatban.</p>
         <p>Sok sikert kívánunk a további álláskereséséhez!</p>
         <br>
         <p>Üdvözlettel,<br><strong>Strem Tamás</strong><br>Területi Igazgató<br><em>Alfa Vienna Insurance Group – Győri Régió</em></p>
@@ -454,7 +451,55 @@ if menu == "Saját Leadek / Dashboard":
   conn.close()
 
   if not df.empty:
-    df_display = df.rename(
+    # 🔍 SZŰRŐK ÉS LAPOZÁS BEÁLLÍTÁSA A DASHBOARDON
+    f_col1, f_col2, f_col3 = st.columns([2, 2, 1])
+
+    with f_col1:
+      sources_list = ["Összes forrás"] + sorted(
+          list(df["source"].dropna().unique())
+      )
+      selected_source = st.selectbox(
+          "🔍 Szűrés Leadcsoport / Forrás szerint:", options=sources_list
+      )
+
+    with f_col2:
+      statuses_list = ["Összes státusz"] + sorted(
+          list(df["status"].dropna().unique())
+      )
+      selected_status = st.selectbox(
+          "📌 Szűrés Státusz szerint:", options=statuses_list
+      )
+
+    with f_col3:
+      page_size = st.selectbox("📄 Megjelenítés:", [20, 50, 100], index=0)
+
+    # Szűrések alkalmazása
+    filtered_df = df.copy()
+    if selected_source != "Összes forrás":
+      filtered_df = filtered_df[filtered_df["source"] == selected_source]
+    if selected_status != "Összes státusz":
+      filtered_df = filtered_df[filtered_df["status"] == selected_status]
+
+    # Lapozás kiszámítása
+    total_items = len(filtered_df)
+    total_pages = max(1, math.ceil(total_items / page_size))
+
+    col_p1, col_p2 = st.columns([1, 4])
+    with col_p1:
+      current_page = st.number_input(
+          f"Oldal (1 - {total_pages}):",
+          min_value=1,
+          max_value=total_pages,
+          value=1,
+          step=1,
+      )
+
+    start_idx = (current_page - 1) * page_size
+    end_idx = start_idx + page_size
+    paged_df = filtered_df.iloc[start_idx:end_idx]
+
+    # Megjelenítés
+    df_display = paged_df.rename(
         columns={
             "id": "ID",
             "client_name": "Ügyfél / Cégnév",
@@ -470,6 +515,10 @@ if menu == "Saját Leadek / Dashboard":
             "notes": "Munkatárs Megjegyzése",
         }
     )
+    st.caption(
+        f"Összesen **{total_items} db** találat | Megjelenítve: {start_idx + 1} -"
+        f" {min(end_idx, total_items)} db"
+    )
     st.dataframe(df_display, use_container_width=True)
 
     st.divider()
@@ -482,11 +531,11 @@ if menu == "Saját Leadek / Dashboard":
               f"{row['client_name']} ({row['source']}) - Jelenlegi status:"
               f" {row['status']}"
           )
-          for _, row in df.iterrows()
+          for _, row in filtered_df.iterrows()
       }
       selected_lead_id = st.selectbox(
           "Válassz leadet a frissítéshez:", options=list(lead_opts.keys())
-      )
+      ) if lead_opts else None
 
     with col2:
       new_status = st.selectbox(
@@ -504,7 +553,7 @@ if menu == "Saját Leadek / Dashboard":
     with col3:
       new_note = st.text_input("Megjegyzés / Visszajelzés:")
 
-    if st.button("Visszajelzés Mentése", type="primary"):
+    if st.button("Visszajelzés Mentése", type="primary") and selected_lead_id:
       conn = get_db_connection()
       cursor = conn.cursor()
       cursor.execute(
@@ -540,14 +589,33 @@ elif menu == "Lead Kiosztás & Visszavétel":
   staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
   staff_options[None] = "-- Nincs kiosztva / Visszavéve --"
 
-  # ==========================================
-  # TÖMEGES KIOSZTÁSI PANEL
-  # ==========================================
-  st.subheader("⚡ Tömeges Lead Kiosztás")
-  with st.expander(
-      "📂 Kattints ide több lead egyidejű kiosztásához / visszavételéhez",
-      expanded=True,
-  ):
+  # 🔍 SZŰRÉS A KIOSZTÁS FELÜLETEN IS
+  all_sources = ["Összes forrás"] + sorted(
+      list(set([l["source"] for l in leads if l["source"]]))
+  )
+  s_col1, s_col2 = st.columns([3, 1])
+  with s_col1:
+    filter_source = st.selectbox(
+        "🔍 Szűrés Leadcsoport / Forrás szerint a kiosztáshoz:",
+        options=all_sources,
+    )
+  with s_col2:
+    kiosztas_page_size = st.selectbox(
+        "📄 Oldalméret:", [20, 50, 100], index=0, key="k_page_size"
+    )
+
+  # Szűrt leadek
+  if filter_source != "Összes forrás":
+    filtered_leads = [l for l in leads if l["source"] == filter_source]
+  else:
+    filtered_leads = list(leads)
+
+  tab1, tab2 = st.tabs(
+      ["⚡ Tömeges Csoportos Kiosztás", "📝 Egyenkénti Kezelés & Visszavétel"]
+  )
+
+  with tab1:
+    st.subheader("⚡ Tömeges Lead Kiosztás")
     b_col1, b_col2 = st.columns([3, 2])
     with b_col1:
       bulk_target_staff = st.selectbox(
@@ -558,9 +626,10 @@ elif menu == "Lead Kiosztás & Visszavétel":
       )
 
     selected_lead_ids = []
-
-    st.caption("Jelöld ki a csoportosan kiosztandó leadeket:")
-    for l in leads:
+    st.caption(
+        f"Jelöld ki a csoportosan kiosztandó leadeket (Összesen: {len(filtered_leads)} db):"
+    )
+    for l in filtered_leads:
       is_checked = st.checkbox(
           f"[{l['source']}] {l['client_name']} ({l['email']}) — Jelenleg:"
           f" {l['status']}",
@@ -594,47 +663,60 @@ elif menu == "Lead Kiosztás & Visszavétel":
         else:
           st.warning("Előbb jelölj ki legalább egy leadet a listából!")
 
-  st.divider()
+  with tab2:
+    st.subheader("📝 Leadek Egyenkénti Kezelése")
 
-  # ==========================================
-  # EGYESÉVEL TÖRTÉNŐ KIOSZTÁS
-  # ==========================================
-  st.subheader("📝 Leadek Egyenkénti Kezelése")
-  for l in leads:
-    col1, col2, col3 = st.columns([3, 3, 2])
-    with col1:
-      st.write(
-          f"**{l['client_name']}** ({l['source']}) - Status: `{l['status']}`"
-      )
-      st.caption(
-          f"E-mail: {l['email']} | Tel: {l['phone']} | Megjegyzés:"
-          f" {l['notes'] if l['notes'] else 'Nincs'}"
-      )
-    with col2:
-      current_assigned = l["assigned_advisor_id"]
+    # Lapozás az egyedi listánál
+    k_total_pages = max(1, math.ceil(len(filtered_leads) / kiosztas_page_size))
+    k_page = st.number_input(
+        f"Oldal (1 - {k_total_pages}):",
+        min_value=1,
+        max_value=k_total_pages,
+        value=1,
+        step=1,
+        key="k_page_num",
+    )
 
-      selected_staff = st.selectbox(
-          "Felelős hozzárendelése",
-          options=list(staff_options.keys()),
-          index=list(staff_options.keys()).index(current_assigned)
-          if current_assigned in staff_options
-          else 0,
-          format_func=lambda x: staff_options[x],
-          key=f"staff_{l['id']}",
-      )
-    with col3:
-      if st.button("Mentés / Kiosztás", key=f"btn_{l['id']}"):
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        new_stat = "Kiosztva" if selected_staff is not None else "Új"
-        cursor.execute(
-            "UPDATE leads SET assigned_advisor_id = ?, status = ? WHERE id = ?",
-            (selected_staff, new_stat, l["id"]),
+    k_start = (k_page - 1) * kiosztas_page_size
+    k_end = k_start + kiosztas_page_size
+    paged_k_leads = filtered_leads[k_start:k_end]
+
+    for l in paged_k_leads:
+      col1, col2, col3 = st.columns([3, 3, 2])
+      with col1:
+        st.write(
+            f"**{l['client_name']}** ({l['source']}) - Status: `{l['status']}`"
         )
-        conn.commit()
-        conn.close()
-        st.success("Lead sikeresen frissítve / kiosztva!")
-        st.rerun()
+        st.caption(
+            f"E-mail: {l['email']} | Tel: {l['phone']} | Megjegyzés:"
+            f" {l['notes'] if l['notes'] else 'Nincs'}"
+        )
+      with col2:
+        current_assigned = l["assigned_advisor_id"]
+
+        selected_staff = st.selectbox(
+            "Felelős hozzárendelése",
+            options=list(staff_options.keys()),
+            index=list(staff_options.keys()).index(current_assigned)
+            if current_assigned in staff_options
+            else 0,
+            format_func=lambda x: staff_options[x],
+            key=f"staff_{l['id']}",
+        )
+      with col3:
+        if st.button("Mentés / Kiosztás", key=f"btn_{l['id']}"):
+          conn = get_db_connection()
+          cursor = conn.cursor()
+          new_stat = "Kiosztva" if selected_staff is not None else "Új"
+          cursor.execute(
+              "UPDATE leads SET assigned_advisor_id = ?, status = ? WHERE id ="
+              " ?",
+              (selected_staff, new_stat, l["id"]),
+          )
+          conn.commit()
+          conn.close()
+          st.success("Lead sikeresen frissítve / kiosztva!")
+          st.rerun()
 
 elif menu == "Új Lead Feltöltés":
   st.title("➕ Új Lead Manuális Hozzáadása")
@@ -644,7 +726,6 @@ elif menu == "Új Lead Feltöltés":
     email = st.text_input("E-mail cím")
     address = st.text_input("Cím / Székhely")
 
-    # MÓDOSÍTOTT FORRÁS VÁLASZTÓ EGYÉB (SZABADON ÍRHATÓ) OPCIÓVAL
     source_type = st.selectbox(
         "Forrás típusa:",
         [
@@ -665,8 +746,10 @@ elif menu == "Új Lead Feltöltés":
     submitted = st.form_submit_button("Lead Rögzítése", type="primary")
 
     if submitted and client_name:
-      # Ha az "Egyéb" opciót választotta ki és írt be egyedi nevet, azt használjuk
-      if source_type == "Egyéb (Egyedi forrás megadása)" and custom_source.strip():
+      if (
+          source_type == "Egyéb (Egyedi forrás megadása)"
+          and custom_source.strip()
+      ):
         final_source = custom_source.strip()
       else:
         final_source = source_type
@@ -701,7 +784,6 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
     st.error("Csak az Igazgató és az Asszisztens kezelheti a felhasználókat.")
     st.stop()
 
-  # 1. MEGLÉVŐ FELHASZNÁLÓK LISTÁJA
   st.subheader("📋 Rendszerben lévő munkatársak")
   conn = get_db_connection()
   df_users = pd.read_sql_query(
@@ -724,8 +806,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
 
   st.divider()
 
-  # 2. MEGLÉVŐ MUNKATÁRS ADATAINAK MÓDOSÍTÁSA
-  st.subheader("✏️ Munkatárs Adatainak Módosítása")
+  st.subheader("✏️ Munkatárs Adatainak Módosítása & Jelszó Beállítása")
 
   conn = get_db_connection()
   cursor = conn.cursor()
@@ -758,7 +839,12 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
       with st.form("edit_user_form"):
         edit_name = st.text_input("Teljes Név", value=selected_user["name"])
         edit_username = st.text_input(
-            "Felhasználónév (E-mail)", value=selected_user["username"]
+            "Felhasználónév (E-mail cím)", value=selected_user["username"]
+        )
+
+        edit_new_pw = st.text_input(
+            "Új jelszó beállítása (Hagyd üresen, ha nem akarod módosítani):",
+            type="password",
         )
 
         roles = ["Manager", "Tanácsadó", "Asszisztens", "Igazgató"]
@@ -793,21 +879,41 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
           try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                            UPDATE users 
-                            SET name = ?, username = ?, role = ?, manager_id = ?, is_active = ?
-                            WHERE id = ?
-                        """,
-                (
-                    edit_name.strip(),
-                    edit_username.strip(),
-                    edit_role,
-                    edit_manager,
-                    1 if edit_active else 0,
-                    selected_edit_id,
-                ),
-            )
+
+            if edit_new_pw.strip():
+              cursor.execute(
+                  """
+                                UPDATE users 
+                                SET name = ?, username = ?, password = ?, role = ?, manager_id = ?, is_active = ?
+                                WHERE id = ?
+                            """,
+                  (
+                      edit_name.strip(),
+                      edit_username.strip(),
+                      edit_new_pw.strip(),
+                      edit_role,
+                      edit_manager,
+                      1 if edit_active else 0,
+                      selected_edit_id,
+                  ),
+              )
+            else:
+              cursor.execute(
+                  """
+                                UPDATE users 
+                                SET name = ?, username = ?, role = ?, manager_id = ?, is_active = ?
+                                WHERE id = ?
+                            """,
+                  (
+                      edit_name.strip(),
+                      edit_username.strip(),
+                      edit_role,
+                      edit_manager,
+                      1 if edit_active else 0,
+                      selected_edit_id,
+                  ),
+              )
+
             conn.commit()
             conn.close()
             st.success(f"Munkatárs adatai sikeresen frissítve: {edit_name}")
@@ -817,7 +923,6 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
 
   st.divider()
 
-  # 3. ÚJ MUNKATÁRS HOZZÁADÁSA
   st.subheader("➕ Új Munkatárs Hozzáadása")
   with st.form("add_user_form"):
     new_username = st.text_input("Felhasználónév (E-mail)")
