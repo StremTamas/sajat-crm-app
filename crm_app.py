@@ -44,6 +44,16 @@ st.markdown(
         color: #0f172a !important;
         font-weight: bold !important;
     }
+    .new-lead-card {
+        background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
+        color: white;
+        padding: 15px 20px;
+        border-radius: 10px;
+        font-weight: bold;
+        font-size: 16px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    }
     </style>
 """,
     unsafe_allow_html=True,
@@ -148,7 +158,6 @@ def get_gspread_client():
 
 
 def sync_google_sheets_to_crm():
-  """Átemeli az ügyfeleket ÉS automatikusan kinyeri a válaszokat/megjegyzéseket az infó sorba."""
   try:
     client = get_gspread_client()
     conn = get_db_connection()
@@ -178,7 +187,6 @@ def sync_google_sheets_to_crm():
               "Kapcsolattartó neve", r.get("Kapcsolattartó", "")
           )
 
-          # EXTRA INFÓ/MEGJEGYZÉS AUTOMATIKUS KINYERÉSE
           extracted_info = []
           for key, val in r.items():
             key_lower = key.lower()
@@ -410,6 +418,8 @@ def process_form_evaluations():
 # ==========================================
 if "user" not in st.session_state:
   st.session_state["user"] = None
+if "last_new_leads_count" not in st.session_state:
+  st.session_state["last_new_leads_count"] = 0
 
 if not st.session_state["user"]:
   st.title("💼 Alfa Arrabona CRM – Bejelentkezés")
@@ -439,7 +449,6 @@ current_user = st.session_state["user"]
 
 st.sidebar.title(f"👤 {current_user['name']}")
 
-# ASSZISZTENS NÉZETVÁLTÓ (Nézet: Asszisztens vs Tanácsadó)
 active_role_view = current_user["role"]
 if current_user["role"] == "Asszisztens":
   active_role_view = st.sidebar.selectbox(
@@ -453,7 +462,11 @@ else:
 
 if st.sidebar.button("🔄 Élő Google Sheets Szinkronizálás"):
   count = sync_google_sheets_to_crm()
-  st.sidebar.success(f"{count} új valódi lead beolvasva!")
+  st.session_state["last_new_leads_count"] = count
+  if count > 0:
+    st.sidebar.success(f"{count} új valódi lead beolvasva!")
+  else:
+    st.sidebar.info("Nincs új beolvasható lead.")
 
 if current_user["role"] in ["Igazgató", "Asszisztens"]:
   if st.sidebar.button("🧹 Nyers/Hibás Leadek Törlése"):
@@ -486,61 +499,110 @@ menu = st.sidebar.radio("Navigáció", menu_options)
 
 if menu == "Saját Leadek / Dashboard":
   st.title("📊 Saját Leadek és Visszajelzések")
-  conn = get_db_connection()
 
-  # Lekérdezés logika a kiválasztott nézet alapján
+  # 💜 LILA/ZÖLD BANNER ÚJ LEAD BEÉRKEZÉSEKOR
+  conn = get_db_connection()
+  cursor = conn.cursor()
+  cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'Új'")
+  unassigned_new_count = cursor.fetchone()[0]
+  conn.close()
+
+  if unassigned_new_count > 0:
+    st.markdown(
+        f'<div class="new-lead-card">🎉 ÚJ LEAD GENERÁLÓDOTT! Jelenleg'
+        f" <strong>{unassigned_new_count} db</strong> még kiosztatlan új lead"
+        " várakozik a rendszerben!</div>",
+        unsafe_allow_html=True,
+    )
+
+  conn = get_db_connection()
+  # ID HELYETT TANÁCSADÓ NEVÉNEK KINYERÉSE (JOIN)
   if current_user["role"] == "Igazgató" or (
       current_user["role"] == "Asszisztens"
       and "Összes lead" in active_role_view
   ):
-    query = "SELECT * FROM leads ORDER BY id DESC"
+    query = """
+            SELECT l.id, l.client_name, l.phone, l.email, l.address, l.contact_person, 
+                   l.source, l.status, l.created_at, l.notes,
+                   COALESCE(u.name, 'Nincs kiosztva') AS advisor_name
+            FROM leads l
+            LEFT JOIN users u ON l.assigned_advisor_id = u.id
+            ORDER BY l.id DESC
+        """
     params = ()
   elif current_user["role"] == "Manager":
     query = """
-            SELECT * FROM leads 
-            WHERE assigned_manager_id = ? 
-               OR assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = ?)
-            ORDER BY id DESC
+            SELECT l.id, l.client_name, l.phone, l.email, l.address, l.contact_person, 
+                   l.source, l.status, l.created_at, l.notes,
+                   COALESCE(u.name, 'Nincs kiosztva') AS advisor_name
+            FROM leads l
+            LEFT JOIN users u ON l.assigned_advisor_id = u.id
+            WHERE l.assigned_manager_id = ? 
+               OR l.assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = ?)
+            ORDER BY l.id DESC
         """
     params = (current_user["id"], current_user["id"])
   else:
-    # Tanácsadó nézet (vagy Asszisztens Tanácsadó módban)
-    query = (
-        "SELECT * FROM leads WHERE assigned_advisor_id = ? ORDER BY id DESC"
-    )
+    query = """
+            SELECT l.id, l.client_name, l.phone, l.email, l.address, l.contact_person, 
+                   l.source, l.status, l.created_at, l.notes,
+                   COALESCE(u.name, 'Nincs kiosztva') AS advisor_name
+            FROM leads l
+            LEFT JOIN users u ON l.assigned_advisor_id = u.id
+            WHERE l.assigned_advisor_id = ? 
+            ORDER BY l.id DESC
+        """
     params = (current_user["id"],)
 
   df = pd.read_sql_query(query, conn, params=params)
   conn.close()
 
   if not df.empty:
-    f_col1, f_col2, f_col3 = st.columns([2, 2, 1])
+    # 🔍 KERESŐMEZŐ ÉS SZŰRŐK
+    st.subheader("🔍 Szűrők és Keresés")
+    s_col1, s_col2, s_col3, s_col4 = st.columns([3, 2, 2, 1])
 
-    with f_col1:
+    with s_col1:
+      search_term = st.text_input(
+          "🔍 Keresés (Név, E-mail, Tel, Megjegyzés):",
+          placeholder="Gépelj be egy nevet vagy telefonszámot...",
+      )
+
+    with s_col2:
       sources_list = ["Összes forrás"] + sorted(
           list(df["source"].dropna().unique())
       )
       selected_source = st.selectbox(
-          "🔍 Szűrés Leadcsoport / Forrás szerint:", options=sources_list
+          "Leadcsoport / Forrás:", options=sources_list
       )
 
-    with f_col2:
+    with s_col3:
       statuses_list = ["Összes státusz"] + sorted(
           list(df["status"].dropna().unique())
       )
-      selected_status = st.selectbox(
-          "📌 Szűrés Státusz szerint:", options=statuses_list
-      )
+      selected_status = st.selectbox("Státusz:", options=statuses_list)
 
-    with f_col3:
-      page_size = st.selectbox("📄 Megjelenítés:", [20, 50, 100], index=0)
+    with s_col4:
+      page_size = st.selectbox("Megjelenítés:", [20, 50, 100], index=0)
 
+    # Szűrések végrehajtása
     filtered_df = df.copy()
+
+    if search_term.strip():
+      term = search_term.strip().lower()
+      filtered_df = filtered_df[
+          filtered_df["client_name"].str.lower().str.contains(term, na=False)
+          | filtered_df["email"].str.lower().str.contains(term, na=False)
+          | filtered_df["phone"].str.lower().str.contains(term, na=False)
+          | filtered_df["notes"].str.lower().str.contains(term, na=False)
+      ]
+
     if selected_source != "Összes forrás":
       filtered_df = filtered_df[filtered_df["source"] == selected_source]
     if selected_status != "Összes státusz":
       filtered_df = filtered_df[filtered_df["status"] == selected_status]
 
+    # Oldaltörés/Lapozás
     total_items = len(filtered_df)
     total_pages = max(1, math.ceil(total_items / page_size))
 
@@ -568,17 +630,27 @@ if menu == "Saját Leadek / Dashboard":
             "contact_person": "Kapcsolattartó",
             "source": "Forrás",
             "status": "Státusz / Visszajelzés",
-            "assigned_manager_id": "Manager ID",
-            "assigned_advisor_id": "Tanácsadó ID",
+            "advisor_name": "Felelős Tanácsadó",
             "created_at": "Létrehozva",
             "notes": "Infó / Munkatárs Megjegyzése",
         }
     )
+
+    # OSZLOP ELEMEK SZŰRÉSE ÉS ÁTRENDEZÉSE
+    all_cols = list(df_display.columns)
+    with st.expander("👁️ Megjelenítendő Oszlopok kiválasztása"):
+      visible_cols = st.multiselect(
+          "Válaszd ki a látható oszlopokat:", default=all_cols, options=all_cols
+      )
+
     st.caption(
         f"Összesen **{total_items} db** találat | Megjelenítve: {start_idx + 1} -"
         f" {min(end_idx, total_items)} db"
     )
-    st.dataframe(df_display, use_container_width=True)
+    if visible_cols:
+      st.dataframe(df_display[visible_cols], use_container_width=True)
+    else:
+      st.dataframe(df_display, use_container_width=True)
 
     st.divider()
     st.subheader("📝 Lead Státusz & Visszajelzés Frissítése")
