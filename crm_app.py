@@ -125,13 +125,20 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. HITELESÍTÉS ÉS DINAMIKUS GOOGLE SHEETS SZINKRON
+# 2. HIVATALOS ADATFORRÁSOK KIZÁRÓLAG
 # ==========================================
-SHEET_SOURCES = [{
-    "name": "Vállalkozói Felmérés (Válaszadók)",
-    "id": "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis",
-    "worksheet": "Munkalap1",
-}]
+SHEET_SOURCES = [
+    {
+        "name": "Vállalkozói Felmérés Válaszok",
+        "id": "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis",
+        "worksheet": "Munkalap1",
+    },
+    {
+        "name": "VIG B2B Ügyfélklub Adatbázis",
+        "id": "1kIdVrApf2VQgQTV3VuZpMNaXYCYu_RvowvPCC54SK-c",
+        "worksheet": "Munkalap1",
+    },
+]
 
 
 def get_gspread_client():
@@ -163,16 +170,11 @@ def sync_google_sheets_to_crm():
         all_rows = sheet.get_all_values()
 
         if len(all_rows) < 2:
-          st.sidebar.warning(f"⚠️ {src['name']}: Nincs adatsor a munkalapon.")
           continue
 
         headers = [str(h).strip().lower() for h in all_rows[0]]
-        st.sidebar.info(
-            f"📊 {src['name']}: {len(all_rows) - 1} sor beolvasva a Sheetből."
-        )
 
         for i, row_values in enumerate(all_rows[1:], start=2):
-          # Dinamikus szótár építése csupaszított fejlécekkel
           r = {}
           for idx, h in enumerate(headers):
             val = str(row_values[idx]).strip() if idx < len(row_values) else ""
@@ -181,9 +183,9 @@ def sync_google_sheets_to_crm():
           nev = ""
           email = ""
           phone = ""
+          feldolgozva = ""
           extracted_info = []
 
-          # Intelligens oszlopbeazonosítás
           for k, v in r.items():
             if not email and ("mail" in k or "e-mail" in k):
               email = v
@@ -191,8 +193,20 @@ def sync_google_sheets_to_crm():
               phone = v
             elif not nev and ("cégnév" in k or "név" in k or "cég" in k):
               nev = v
+            elif "feldolgozva" in k:
+              feldolgozva = v.upper()
 
-          # Egyéb mezők gyűjtése a megjegyzésbe
+          # SZŰRÉS: Ha már fel van dolgozva ("OK"), átlépjük!
+          if feldolgozva == "OK":
+            continue
+
+          if not email and not nev:
+            continue
+
+          if not nev and email:
+            nev = email.split("@")[0].capitalize()
+
+          # Megjegyzés készítése
           for k, v in r.items():
             if v and not any(
                 skip in k
@@ -209,14 +223,7 @@ def sync_google_sheets_to_crm():
             ):
               extracted_info.append(f"{v}")
 
-          if not email and not nev:
-            st.sidebar.caption(f"⚠️ Sor {i} kihagyva: Nincs se név, se e-mail.")
-            continue
-
-          if not nev and email:
-            nev = email.split("@")[0].capitalize()
-
-          # Duplikáció ellenőrzése kizárólag E-mail vagy Cégnév alapján
+          # Duplikáció ellenőrzése az adatbázisban
           cursor.execute(
               "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
               " client_name != '')",
@@ -224,13 +231,11 @@ def sync_google_sheets_to_crm():
           )
           existing = cursor.fetchone()
 
-          if existing:
-            st.sidebar.caption(f"ℹ️ Sor {i} már létezik ({nev} - {email})")
-          else:
+          if not existing:
             auto_notes = (
                 " | ".join(extracted_info)
                 if extracted_info
-                else "Vállalkozói Felmérés kitöltő"
+                else "Beérkezett kitöltő"
             )
 
             cursor.execute(
@@ -241,7 +246,6 @@ def sync_google_sheets_to_crm():
                 (nev, phone, email, nev, src["name"], auto_notes),
             )
             new_leads_count += 1
-            st.sidebar.success(f"✅ Új lead rögzítve: {nev} ({email})")
 
       except Exception as err:
         st.sidebar.error(f"❌ Hiba ({src['name']}): {err}")
@@ -834,7 +838,7 @@ elif menu == "Lead Kiosztás & Visszavétel":
             if current_assigned in staff_options
             else 0,
             format_func=lambda x: staff_options[x],
-            key="staff_{l['id']}",
+            key=f"staff_{l['id']}",
         )
       with col3:
         if st.button("Mentés / Kiosztás", key=f"btn_{l['id']}"):
