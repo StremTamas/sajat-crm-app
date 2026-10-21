@@ -170,15 +170,14 @@ def sync_google_sheets_to_crm():
         records = sheet.get_all_records()
 
         for row in records:
-          # Csupaszítjuk a kulcsokat és értékeket a szóközöktől
           r = {str(k).strip(): str(v).strip() for k, v in row.items()}
 
-          # Okos mezőkeresés (rugalmas oszlopnév párosítás)
           nev = ""
           email = ""
           phone = ""
           cim = ""
 
+          # Rugalmas oszlopazonosítás
           for k, v in r.items():
             k_clean = k.lower()
             if not email and (
@@ -203,11 +202,9 @@ def sync_google_sheets_to_crm():
             ):
               cim = v
 
-          # Ha még így sem talált nevet, de van e-mail, az e-mail előtti részt használjuk névként
           if not nev and email:
             nev = email.split("@")[0].capitalize()
 
-          # Összegyűjtjük a válaszokat a megjegyzés mezőbe
           extracted_info = []
           for key, val in r.items():
             k_lower = key.lower()
@@ -227,7 +224,6 @@ def sync_google_sheets_to_crm():
           if not email or not nev:
             continue
 
-          # Duplikáció ellenőrzés
           cursor.execute(
               "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
               " client_name != '')",
@@ -243,13 +239,13 @@ def sync_google_sheets_to_crm():
             )
             new_leads_count += 1
 
-      except Exception as err:
+      except Exception:
         continue
 
     conn.commit()
     conn.close()
     return new_leads_count
-  except Exception as e:
+  except Exception:
     return 0
 
 
@@ -577,6 +573,7 @@ if menu == "Saját Leadek / Dashboard":
 
     filtered_df = df.copy()
 
+    # KIS- ÉS NAGYBETŰ FÜGGETLEN KERESÉS
     if search_term.strip():
       term = search_term.strip().lower()
       filtered_df = filtered_df[
