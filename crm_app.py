@@ -125,7 +125,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. HITELESÍTÉS ÉS SZIGORÚAN CSAK A VÁLLALKOZÓI FELMÉRÉS BEOLVASÁSA
+# 2. HITELESÍTÉS ÉS DINAMIKUS GOOGLE SHEETS SZINKRON
 # ==========================================
 SHEET_SOURCES = [{
     "name": "Vállalkozói Felmérés (Válaszadók)",
@@ -163,54 +163,73 @@ def sync_google_sheets_to_crm():
         all_rows = sheet.get_all_values()
 
         if len(all_rows) < 2:
+          st.sidebar.warning(f"⚠️ {src['name']}: Nincs adatsor a munkalapon.")
           continue
 
-        headers = [str(h).strip() for h in all_rows[0]]
+        headers = [str(h).strip().lower() for h in all_rows[0]]
+        st.sidebar.info(
+            f"📊 {src['name']}: {len(all_rows) - 1} sor beolvasva a Sheetből."
+        )
 
         for i, row_values in enumerate(all_rows[1:], start=2):
+          # Dinamikus szótár építése csupaszított fejlécekkel
           r = {}
           for idx, h in enumerate(headers):
             val = str(row_values[idx]).strip() if idx < len(row_values) else ""
             r[h] = val
 
-          nev = r.get("Cégnév", "")
-          email = r.get("E-mail cím", "")
-          phone = r.get("Telefonszám", "")
-          letszam = r.get("Hány munkavállalót foglalkoztat a cég?", "")
-          teruletek = r.get(
-              "Milyen területeken látna szívesen díjmentes szakértői auditot,"
-              " tájékoztatást vagy segítséget?",
-              "",
-          )
-          megjegyzes = r.get(
-              "Megjegyzés, egyedi kérdés vagy segítségkérés", ""
-          )
+          nev = ""
+          email = ""
+          phone = ""
+          extracted_info = []
+
+          # Intelligens oszlopbeazonosítás
+          for k, v in r.items():
+            if not email and ("mail" in k or "e-mail" in k):
+              email = v
+            elif not phone and ("telefon" in k or "tel" in k or "mobil" in k):
+              phone = v
+            elif not nev and ("cégnév" in k or "név" in k or "cég" in k):
+              nev = v
+
+          # Egyéb mezők gyűjtése a megjegyzésbe
+          for k, v in r.items():
+            if v and not any(
+                skip in k
+                for skip in [
+                    "időbélyeg",
+                    "timestamp",
+                    "feldolgozva",
+                    "cégnév",
+                    "e-mail",
+                    "email",
+                    "telefonszám",
+                    "tel",
+                ]
+            ):
+              extracted_info.append(f"{v}")
 
           if not email and not nev:
+            st.sidebar.caption(f"⚠️ Sor {i} kihagyva: Nincs se név, se e-mail.")
             continue
 
           if not nev and email:
             nev = email.split("@")[0].capitalize()
 
-          # Ellenőrizzük az adatbázisban a meglétét
+          # Duplikáció ellenőrzése kizárólag E-mail vagy Cégnév alapján
           cursor.execute(
-              "SELECT id FROM leads WHERE email = ? AND client_name = ?",
+              "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
+              " client_name != '')",
               (email, nev),
           )
           existing = cursor.fetchone()
 
-          if not existing:
-            notes_parts = []
-            if letszam:
-              notes_parts.append(f"Létszám: {letszam}")
-            if teruletek:
-              notes_parts.append(f"Igényelt audit: {teruletek}")
-            if megjegyzes:
-              notes_parts.append(f"Megjegyzés: {megjegyzes}")
-
+          if existing:
+            st.sidebar.caption(f"ℹ️ Sor {i} már létezik ({nev} - {email})")
+          else:
             auto_notes = (
-                " | ".join(notes_parts)
-                if notes_parts
+                " | ".join(extracted_info)
+                if extracted_info
                 else "Vállalkozói Felmérés kitöltő"
             )
 
@@ -222,6 +241,7 @@ def sync_google_sheets_to_crm():
                 (nev, phone, email, nev, src["name"], auto_notes),
             )
             new_leads_count += 1
+            st.sidebar.success(f"✅ Új lead rögzítve: {nev} ({email})")
 
       except Exception as err:
         st.sidebar.error(f"❌ Hiba ({src['name']}): {err}")
@@ -814,7 +834,7 @@ elif menu == "Lead Kiosztás & Visszavétel":
             if current_assigned in staff_options
             else 0,
             format_func=lambda x: staff_options[x],
-            key=f"staff_{l['id']}",
+            key="staff_{l['id']}",
         )
       with col3:
         if st.button("Mentés / Kiosztás", key=f"btn_{l['id']}"):
