@@ -207,7 +207,6 @@ def sync_google_sheets_to_crm():
                             email = v
                         elif not phone and ("telefon" in k or "tel" in k or "mobil" in k):
                             phone = v
-                        # Bővítettük a keresést az ékezet nélküli "nev" szóra is, hogy a Promobox-os Ügyfél_Neve is betöltődjön
                         elif not nev and (
                             "cégnév" in k
                             or "név" in k
@@ -244,9 +243,10 @@ def sync_google_sheets_to_crm():
                         ):
                             extracted_info.append(f"{v}")
 
+                    # MÓDOSÍTÁS ITT: A duplikációt most már forrásonként (source) vizsgáljuk!
                     cursor.execute(
-                        "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND client_name != '')",
-                        (email, nev),
+                        "SELECT id FROM leads WHERE (email = ? OR (client_name = ? AND client_name != '')) AND source = ?",
+                        (email, nev, src["name"]),
                     )
                     existing = cursor.fetchone()
 
