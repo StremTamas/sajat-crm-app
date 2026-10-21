@@ -241,7 +241,7 @@ def get_elutasito_email(nev):
     <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6;">
         <p>Kedves {nev}!</p>
         <p>Köszönjük, hogy időt szánt a kérdőívünk kitöltésére és érdeklődött a győri Alfa VIG karrierlehetőségei iránt.</p>
-        <p>Sajnálattal tájékoztatjuk, hogy a jelenlegi nyitott pozícióinkhoz elengedhetetlen a vállalkozói jogviszony keretében történő együttműködés. Mivel Ön jelzése alapján kizárólag főállású/alkalmazotti jogviszonyban gondolkodik, így jelenleg nem tudjuk tovabléptetni a kiválasztási folyamatban.</p>
+        <p>Sajnálattal tájékoztatjuk, hogy a jelenlegi nyitott pozícióinkhoz elengedhetetlen a vállalkozói jogviszony keretében történő együttműködés. Mivel Ön jelzése alapján kizárólag főállású/alkalmazotti jogviszonyban gondolkodik, így jelenleg nem tudjuk továbbléptetni a kiválasztási folyamatban.</p>
         <p>Sok sikert kívánunk a további álláskereséséhez!</p>
         <br>
         <p>Üdvözlettel,<br><strong>Strem Tamás</strong><br>Területi Igazgató<br><em>Alfa Vienna Insurance Group – Győri Régió</em></p>
@@ -528,7 +528,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
 
   conn = get_db_connection()
   cursor = conn.cursor()
-
   cursor.execute(
       "SELECT * FROM leads WHERE status != 'Lezárt' ORDER BY id DESC"
   )
@@ -538,7 +537,71 @@ elif menu == "Lead Kiosztás & Visszavétel":
   staff = cursor.fetchall()
   conn.close()
 
-  st.subheader("Meglévő Leadek Kezelése")
+  staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
+  staff_options[None] = "-- Nincs kiosztva / Visszavéve --"
+
+  # ==========================================
+  # ÚJ: TÖMEGES KIOSZTÁSI PANEL (BULK ASSIGNMENT)
+  # ==========================================
+  st.subheader("⚡ Tömeges Lead Kiosztás")
+  with st.expander(
+      "📂 Kattints ide több lead egyidejű kiosztásához / visszavételéhez",
+      expanded=True,
+  ):
+    b_col1, b_col2 = st.columns([3, 2])
+    with b_col1:
+      bulk_target_staff = st.selectbox(
+          "Válaszd ki a cél-munkatársat a kijelölt leadekhez:",
+          options=list(staff_options.keys()),
+          format_func=lambda x: staff_options[x],
+          key="bulk_staff_select",
+      )
+
+    selected_lead_ids = []
+
+    # Kijelölési lista megjelenítése dobozokban
+    st.caption("Jelöld ki a csoportosan kiosztandó leadeket:")
+    for l in leads:
+      is_checked = st.checkbox(
+          f"[{l['source']}] {l['client_name']} ({l['email']}) — Jelenleg:"
+          f" {l['status']}",
+          key=f"chk_{l['id']}",
+      )
+      if is_checked:
+        selected_lead_ids.append(l["id"])
+
+    with b_col2:
+      if st.button(
+          f"🚀 Kijelölt {len(selected_lead_ids)} db lead kiosztása",
+          type="primary",
+      ):
+        if selected_lead_ids:
+          conn = get_db_connection()
+          cursor = conn.cursor()
+          new_stat = "Kiosztva" if bulk_target_staff is not None else "Új"
+
+          # Tömeges adatbázis frissítés
+          placeholders = ",".join(["?"] * len(selected_lead_ids))
+          query = f"UPDATE leads SET assigned_advisor_id = ?, status = ? WHERE id IN ({placeholders})"
+          params = [bulk_target_staff, new_stat] + selected_lead_ids
+
+          cursor.execute(query, params)
+          conn.commit()
+          conn.close()
+
+          st.success(
+              f"Sikeresen kiosztva/módosítva {len(selected_lead_ids)} db lead!"
+          )
+          st.rerun()
+        else:
+          st.warning("Előbb jelölj ki legalább egy leadet a listából!")
+
+  st.divider()
+
+  # ==========================================
+  # EGYESÉVEL TÖRTÉNŐ KIOSZTÁS
+  # ==========================================
+  st.subheader("📝 Leadek Egyenkénti Kezelése")
   for l in leads:
     col1, col2, col3 = st.columns([3, 3, 2])
     with col1:
@@ -550,9 +613,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
           f" {l['notes'] if l['notes'] else 'Nincs'}"
       )
     with col2:
-      staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
-      staff_options[None] = "-- Nincs kiosztva / Visszavéve --"
-
       current_assigned = l["assigned_advisor_id"]
 
       selected_staff = st.selectbox(
@@ -651,7 +711,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
 
   st.divider()
 
-  # 2. MEGLÉVŐ MUNKATÁRS ADATAINAK MÓDOSÍTÁSA (ÚJ FUNKCIÓ)
+  # 2. MEGLÉVŐ MUNKATÁRS ADATAINAK MÓDOSÍTÁSA
   st.subheader("✏️ Munkatárs Adatainak Módosítása")
 
   conn = get_db_connection()
@@ -659,7 +719,6 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
   cursor.execute("SELECT * FROM users ORDER BY id ASC")
   all_users = cursor.fetchall()
 
-  # Kiválasztható felettesek
   cursor.execute(
       "SELECT id, name, role FROM users WHERE role IN ('Igazgató', 'Manager')"
   )
@@ -678,8 +737,9 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
         "Válaszd ki a módosítandó munkatársat:", options=list(user_opts.keys())
     )
 
-    # Megkeressük a kiválasztott user meglévő adatait
-    selected_user = next((u for u in all_users if u["id"] == selected_edit_id), None)
+    selected_user = next(
+        (u for u in all_users if u["id"] == selected_edit_id), None
+    )
 
     if selected_user:
       with st.form("edit_user_form"):
