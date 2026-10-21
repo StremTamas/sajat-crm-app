@@ -125,7 +125,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. HITELESÍTÉS ÉS OKOS GOOGLE SHEETS SZINKRON
+# 2. HITELESÍTÉS ÉS OKOS GOOGLE SHEETS SZINKRON (DIAGNOSZTIKÁVAL)
 # ==========================================
 SHEET_SOURCES = [
     {
@@ -169,67 +169,81 @@ def sync_google_sheets_to_crm():
         sheet = client.open_by_key(src["id"]).worksheet(src["worksheet"])
         records = sheet.get_all_records()
 
-        for row in records:
+        st.sidebar.info(
+            f"📊 {src['name']}: {len(records)} sor beolvasva a Sheetből."
+        )
+
+        for i, row in enumerate(records, start=2):
           r = {str(k).strip(): str(v).strip() for k, v in row.items()}
 
-          nev = ""
-          email = ""
-          phone = ""
-          cim = ""
-
-          # Rugalmas oszlopazonosítás
-          for k, v in r.items():
-            k_clean = k.lower()
-            if not email and (
-                "mail" in k_clean
-                or "e-mail" in k_clean
-                or "email" in k_clean
-            ):
-              email = v
-            elif not phone and (
-                "telefon" in k_clean or "tel" in k_clean or "mobil" in k_clean
-            ):
-              phone = v
-            elif not nev and (
-                "cégnév" in k_clean
-                or "név" in k_clean
-                or "kapcsolattartó" in k_clean
-                or "cég" in k_clean
-            ):
-              nev = v
-            elif not cim and (
-                "cím" in k_clean or "székhely" in k_clean or "telephely" in k_clean
-            ):
-              cim = v
-
-          if not nev and email:
-            nev = email.split("@")[0].capitalize()
-
-          extracted_info = []
-          for key, val in r.items():
-            k_lower = key.lower()
-            if val and not any(
-                skip in k_lower
-                for skip in ["időbélyeg", "timestamp", "feldolgozva"]
-            ):
-              if key not in [nev, email, phone, cim]:
-                extracted_info.append(f"{key}: {val}")
-
-          auto_notes = (
-              " | ".join(extracted_info)
-              if extracted_info
-              else "Automatikus beolvasás"
+          nev = (
+              r.get("Cégnév")
+              or r.get("Név")
+              or r.get("Kapcsolattartó neve")
+              or r.get("Kapcsolattartó")
+              or ""
+          )
+          email = (
+              r.get("E-mail cím")
+              or r.get("Email")
+              or r.get("Email cím")
+              or r.get("Ügyfél_Email")
+              or ""
+          )
+          phone = (
+              r.get("Telefonszám")
+              or r.get("Ügyfél_Telefonszám")
+              or r.get("Tel")
+              or ""
+          )
+          cim = (
+              r.get("Székhely / Cím")
+              or r.get("Cím")
+              or r.get("Ügyfél_Címe")
+              or ""
           )
 
           if not email or not nev:
+            st.sidebar.warning(
+                f"⚠️ Sor {i} kihagyva (hiányzó név/email): Név='{nev}',"
+                f" Email='{email}'"
+            )
             continue
 
+          # Ellenőrizzük, szerepel-e már az adatbázisban
           cursor.execute(
               "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
               " client_name != '')",
               (email, nev),
           )
-          if not cursor.fetchone():
+          existing = cursor.fetchone()
+
+          if existing:
+            st.sidebar.caption(
+                f"ℹ️ Sor {i} már létezik a CRM-ben ({nev} - {email})"
+            )
+          else:
+            extracted_info = []
+            for key, val in r.items():
+              k_lower = key.lower()
+              if val and not any(
+                  skip in k_lower
+                  for skip in ["időbélyeg", "timestamp", "feldolgozva"]
+              ):
+                if key not in [
+                    "Cégnév",
+                    "E-mail cím",
+                    "Telefonszám",
+                    "Székhely / Cím",
+                ]:
+                  extracted_info.append(f"{key}: {val}")
+
+            auto_notes = (
+                " | ".join(extracted_info)
+                if extracted_info
+                else "Automatikus beolvasás"
+            )
+
             cursor.execute(
                 """
                             INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
@@ -238,14 +252,17 @@ def sync_google_sheets_to_crm():
                 (nev, phone, email, cim, nev, src["name"], auto_notes),
             )
             new_leads_count += 1
+            st.sidebar.success(f"✅ Új lead rögzítve: {nev} ({email})")
 
-      except Exception:
+      except Exception as err:
+        st.sidebar.error(f"❌ Hiba ({src['name']}): {err}")
         continue
 
     conn.commit()
     conn.close()
     return new_leads_count
-  except Exception:
+  except Exception as e:
+    st.sidebar.error(f"❌ Általános hiba: {e}")
     return 0
 
 
