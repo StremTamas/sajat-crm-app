@@ -541,7 +541,7 @@ elif menu == "Lead Kiosztás & Visszavétel":
   staff_options[None] = "-- Nincs kiosztva / Visszavéve --"
 
   # ==========================================
-  # ÚJ: TÖMEGES KIOSZTÁSI PANEL (BULK ASSIGNMENT)
+  # TÖMEGES KIOSZTÁSI PANEL
   # ==========================================
   st.subheader("⚡ Tömeges Lead Kiosztás")
   with st.expander(
@@ -559,7 +559,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
 
     selected_lead_ids = []
 
-    # Kijelölési lista megjelenítése dobozokban
     st.caption("Jelöld ki a csoportosan kiosztandó leadeket:")
     for l in leads:
       is_checked = st.checkbox(
@@ -580,7 +579,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
           cursor = conn.cursor()
           new_stat = "Kiosztva" if bulk_target_staff is not None else "Új"
 
-          # Tömeges adatbázis frissítés
           placeholders = ",".join(["?"] * len(selected_lead_ids))
           query = f"UPDATE leads SET assigned_advisor_id = ?, status = ? WHERE id IN ({placeholders})"
           params = [bulk_target_staff, new_stat] + selected_lead_ids
@@ -645,19 +643,34 @@ elif menu == "Új Lead Feltöltés":
     phone = st.text_input("Telefonszám")
     email = st.text_input("E-mail cím")
     address = st.text_input("Cím / Székhely")
-    source = st.selectbox(
-        "Forrás",
+
+    # MÓDOSÍTOTT FORRÁS VÁLASZTÓ EGYÉB (SZABADON ÍRHATÓ) OPCIÓVAL
+    source_type = st.selectbox(
+        "Forrás típusa:",
         [
             "Promobox Kampány",
             "Vállalkozói Felmérés",
             "Ügyfélklub",
             "Évfordulós Felülvizsgálat",
             "Személyes Ajánlás",
+            "Egyéb (Egyedi forrás megadása)",
         ],
     )
+
+    custom_source = st.text_input(
+        "Egyedi forrás megnevezése (ha az 'Egyéb' opciót választottad):",
+        placeholder="pl. Szeptemberi Networking Est, Facebook hirdetés stb.",
+    )
+
     submitted = st.form_submit_button("Lead Rögzítése", type="primary")
 
     if submitted and client_name:
+      # Ha az "Egyéb" opciót választotta ki és írt be egyedi nevet, azt használjuk
+      if source_type == "Egyéb (Egyedi forrás megadása)" and custom_source.strip():
+        final_source = custom_source.strip()
+      else:
+        final_source = source_type
+
       conn = get_db_connection()
       cursor = conn.cursor()
       cursor.execute(
@@ -665,11 +678,11 @@ elif menu == "Új Lead Feltöltés":
                 INSERT INTO leads (client_name, phone, email, address, source, status)
                 VALUES (?, ?, ?, ?, ?, 'Új')
             """,
-          (client_name, phone, email, address, source),
+          (client_name, phone, email, address, final_source),
       )
       conn.commit()
       conn.close()
-      st.success("Új lead sikeresen rögzítve!")
+      st.success(f"Új lead sikeresen rögzítve! (Forrás: {final_source})")
 
 elif menu == "📥 Toborzási Form Kiértékelés":
   st.title("📋 Toborzási Kérdőív Kiértékelés")
