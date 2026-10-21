@@ -67,7 +67,9 @@ SENDER_EMAIL = "arrabonainsurance@gmail.com"
 SENDER_NAME = "Insurance Arrabona"
 SENDER_PASSWORD = "aqzs okrl jewl ypdw"
 
-FORM_SPREADSHEET_ID = "1hlFrgfdUDANg1m2gIA6w_10kI5ODQ_TIw8v9-WmYf-g"
+RECRUITMENT_FORM_SPREADSHEET_ID = (
+    "1hlFrgfdUDANg1m2gIA6w_10kI5ODQ_TIw8v9-WmYf-g"
+)
 POSSIBLE_FORM_SHEETS = [
     "Form Responses 1",
     "Űrlapválaszok 1",
@@ -125,18 +127,32 @@ def init_db():
 init_db()
 
 # ==========================================
-# 2. HELYES VÁLLALKOZÓI IGÉNYFELMÉRŐ Google Sheet ADATFORRÁSOK
+# 2. HIVATALOS ADATFORRÁSOK (A megadott táblázatok alapján)
 # ==========================================
 SHEET_SOURCES = [
     {
-        "name": "Vállalkozói Igényfelmérés Válaszok",
-        "id": "1Gw6teVYi940HdPHiO5WoSrEqKSfnZtv5RTl_tAFDEis",
+        "name": "Vállalkozói Felmérés Válaszok",
+        "id": "1BGe4tQCN-KRIXaONivmqflyrQtXiJ4ozGr4L9LgOPZs",
         "worksheet": "Munkalap1",
     },
     {
-        "name": "VIG B2B Ügyfélklub Adatbázis",
-        "id": "1N0Lc-F5mNds7oqcrpjTXOazwrcRlBasbuVkVsG28B2k",
+        "name": "Ügyfél Évfordulók",
+        "id": "1mFO7kg_JXVLbzSA2r7_gqRRLqhpXyaiUgvlCg-EoxHY",
         "worksheet": "Munkalap1",
+        "condition_col": "válasz",
+        "condition_val": "igen, kérem a felülvizsgálatot",
+    },
+    {
+        "name": "VIG B2B Ügyfélklub Adatbázis",
+        "id": "1I3_asDDKdePuZjoFBBV7hiG4EzpBHKy3Rc467yt2uTc",
+        "worksheet": "Munkalap1",
+    },
+    {
+        "name": "Promobox ügyfelek",
+        "id": "1lvg5SahZ5r9BONF443ZEHj3SIWmxjiNZhbPSU5yj84w",
+        "worksheet": "Munkalap1",
+        "condition_col": "válasz",
+        "condition_val": "igen",
     },
 ]
 
@@ -180,6 +196,16 @@ def sync_google_sheets_to_crm():
             val = str(row_values[idx]).strip() if idx < len(row_values) else ""
             r[h] = val
 
+          # Ha van speciális feltétel a táblázathoz (pl. Évforduló vagy Promobox)
+          if "condition_col" in src:
+            cond_found = False
+            for k, v in r.items():
+              if src["condition_col"] in k and src["condition_val"] in v.lower():
+                cond_found = True
+                break
+            if not cond_found:
+              continue
+
           nev = ""
           email = ""
           phone = ""
@@ -192,14 +218,16 @@ def sync_google_sheets_to_crm():
             elif not phone and ("telefon" in k or "tel" in k or "mobil" in k):
               phone = v
             elif not nev and (
-                "cégnév" in k or "név" in k or "cég" in k or "kapcsolattartó" in k
+                "cégnév" in k
+                or "név" in k
+                or "cég" in k
+                or "kapcsolattartó" in k
             ):
               nev = v
-            elif "feldolgozva" in k:
+            elif "feldolgozva" in k or "status" in k:
               feldolgozva = v.upper()
 
-          # AMENNYIBEN A "FELDOLGOZVA" OSZLOPBAN "OK" VAGY "IGEN" VAN, ÁTLÉPJÜK
-          if feldolgozva in ["OK", "IGEN", "FELDOLGOZVA"]:
+          if feldolgozva in ["OK", "IGEN", "FELDOLGOZVA", "LEZÁRT"]:
             continue
 
           if not email and not nev:
@@ -224,7 +252,6 @@ def sync_google_sheets_to_crm():
             ):
               extracted_info.append(f"{v}")
 
-          # Duplikáció kiszűrése az adatbázisból
           cursor.execute(
               "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
               " client_name != '')",
@@ -236,7 +263,7 @@ def sync_google_sheets_to_crm():
             auto_notes = (
                 " | ".join(extracted_info)
                 if extracted_info
-                else "Beérkezett igényfelmérés kitöltő"
+                else "Beérkezett kitöltés"
             )
 
             cursor.execute(
@@ -308,7 +335,7 @@ def get_elutasito_email(nev):
 def process_form_evaluations():
   try:
     gc = get_gspread_client()
-    spreadsheet = gc.open_by_key(FORM_SPREADSHEET_ID)
+    spreadsheet = gc.open_by_key(RECRUITMENT_FORM_SPREADSHEET_ID)
 
     sheet = None
     for name in POSSIBLE_FORM_SHEETS:
