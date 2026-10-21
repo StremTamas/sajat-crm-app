@@ -170,56 +170,53 @@ def sync_google_sheets_to_crm():
         records = sheet.get_all_records()
 
         for row in records:
+          # Csupaszítjuk a kulcsokat és értékeket a szóközöktől
           r = {str(k).strip(): str(v).strip() for k, v in row.items()}
 
-          # PONTOS OSZLOPFOGALMAZÁSOK RÁILLESZTÉSE
-          nev = (
-              r.get("Cégnév")
-              or r.get("Név")
-              or r.get("Kapcsolattartó neve")
-              or r.get("Kapcsolattartó")
-              or ""
-          )
-          email = (
-              r.get("E-mail cím")
-              or r.get("Email")
-              or r.get("Email cím")
-              or r.get("Ügyfél_Email")
-              or ""
-          )
-          phone = (
-              r.get("Telefonszám") or r.get("Ügyfél_Telefonszám") or r.get("Tel") or ""
-          )
-          cim = (
-              r.get("Székhely / Cím")
-              or r.get("Cím")
-              or r.get("Ügyfél_Címe")
-              or ""
-          )
-          kapcsolattarto = r.get("Kapcsolattartó neve") or r.get("Kapcsolattartó") or ""
+          # Okos mezőkeresés (rugalmas oszlopnév párosítás)
+          nev = ""
+          email = ""
+          phone = ""
+          cim = ""
 
-          # PONTOS OSZLOP-KINYERÉS A MEGJEGYZÉS/INFÓ SORBA
+          for k, v in r.items():
+            k_clean = k.lower()
+            if not email and (
+                "mail" in k_clean
+                or "e-mail" in k_clean
+                or "email" in k_clean
+            ):
+              email = v
+            elif not phone and (
+                "telefon" in k_clean or "tel" in k_clean or "mobil" in k_clean
+            ):
+              phone = v
+            elif not nev and (
+                "cégnév" in k_clean
+                or "név" in k_clean
+                or "kapcsolattartó" in k_clean
+                or "cég" in k_clean
+            ):
+              nev = v
+            elif not cim and (
+                "cím" in k_clean or "székhely" in k_clean or "telephely" in k_clean
+            ):
+              cim = v
+
+          # Ha még így sem talált nevet, de van e-mail, az e-mail előtti részt használjuk névként
+          if not nev and email:
+            nev = email.split("@")[0].capitalize()
+
+          # Összegyűjtjük a válaszokat a megjegyzés mezőbe
           extracted_info = []
-
-          m_f = r.get("Hány munkavállalót foglalkoztat a cég?")
-          if m_f:
-            extracted_info.append(f"Munkavállalók: {m_f}")
-
-          teruletek = r.get(
-              "Mylien területeken látna szívesen díjmentes szakértői auditot,"
-              " tájékoztatást vagy segítséget?"
-          ) or r.get(
-              "Milyen területeken látna szívesen díjmentes szakértői auditot,"
-              " tájékoztatást vagy segítséget?"
-          )
-          if teruletek:
-            extracted_info.append(f"Igényelt terület: {teruletek}")
-
-          megj = r.get("Megjegyzés, egyedi kérdés vagy segítségkérés") or r.get(
-              "Megjegyzés"
-          )
-          if megj:
-            extracted_info.append(f"Megjegyzés: {megj}")
+          for key, val in r.items():
+            k_lower = key.lower()
+            if val and not any(
+                skip in k_lower
+                for skip in ["időbélyeg", "timestamp", "feldolgozva"]
+            ):
+              if key not in [nev, email, phone, cim]:
+                extracted_info.append(f"{key}: {val}")
 
           auto_notes = (
               " | ".join(extracted_info)
@@ -230,6 +227,7 @@ def sync_google_sheets_to_crm():
           if not email or not nev:
             continue
 
+          # Duplikáció ellenőrzés
           cursor.execute(
               "SELECT id FROM leads WHERE email = ? OR (client_name = ? AND"
               " client_name != '')",
@@ -241,25 +239,17 @@ def sync_google_sheets_to_crm():
                             INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
                             VALUES (?, ?, ?, ?, ?, ?, 'Új', ?)
                         """,
-                (
-                    nev,
-                    phone,
-                    email,
-                    cim,
-                    kapcsolattarto,
-                    src["name"],
-                    auto_notes,
-                ),
+                (nev, phone, email, cim, nev, src["name"], auto_notes),
             )
             new_leads_count += 1
 
-      except Exception:
+      except Exception as err:
         continue
 
     conn.commit()
     conn.close()
     return new_leads_count
-  except Exception:
+  except Exception as e:
     return 0
 
 
