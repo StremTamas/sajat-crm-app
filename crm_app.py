@@ -157,7 +157,7 @@ def get_gspread_client():
   return gspread.authorize(creds)
 
 
-def def sync_google_sheets_to_crm():
+def sync_google_sheets_to_crm():
   try:
     client = get_gspread_client()
     conn = get_db_connection()
