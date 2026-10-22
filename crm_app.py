@@ -126,26 +126,31 @@ init_db()
 # ==========================================
 # 2. HIVATALOS ADATFORRÁSOK 
 # ==========================================
+# Itt tudod módosítani a cooldown_days (várakozási idő napokban) értékét!
 SHEET_SOURCES = [
     {
         "name": "Vállalkozói Felmérés Válaszok",
         "id": "1BGe4tQCN-KRIXaONivmqflyrQtXiJ4ozGr4L9LgOPZs",
+        "cooldown_days": 30 
     },
     {
         "name": "Ügyfél Évfordulók",
         "id": "1mFO7kg_JXVLbzSA2r7_gqRRLqhpXyaiUgvlCg-EoxHY",
         "condition_col": "felülvizsgálat", 
-        "condition_val": "igen", 
+        "condition_val": "igen",
+        "cooldown_days": 30 
     },
     {
         "name": "VIG B2B Ügyfélklub Adatbázis",
         "id": "1l3_asDDKdePuZjoFBBV7hiG4EzpBHKy3Rc467yt2uTc",
+        "cooldown_days": 30 
     },
     {
         "name": "Promobox ügyfelek",
         "id": "1lvg5SahZ5r9BONF443ZEHj3SIWmxjiNZhbPSU5yj84w",
         "condition_col": "", 
         "condition_val": "igen",
+        "cooldown_days": 30 
     },
 ]
 
@@ -173,98 +178,109 @@ def sync_google_sheets_to_crm():
 
         for src in SHEET_SOURCES:
             try:
-                sheet = client.open_by_key(src["id"]).sheet1
-                all_rows = sheet.get_all_values()
+                spreadsheet = client.open_by_key(src["id"])
+                cooldown = src.get("cooldown_days", 30)
+                
+                # Végigmegyünk az ÖSSZES munkalapon (fülön) a táblázaton belül
+                for sheet in spreadsheet.worksheets():
+                    all_rows = sheet.get_all_values()
 
-                if len(all_rows) < 2:
-                    continue
+                    if len(all_rows) < 2:
+                        continue
 
-                headers = [str(h).strip().lower() for h in all_rows[0]]
+                    headers = [str(h).strip().lower() for h in all_rows[0]]
 
-                for i, row_values in enumerate(all_rows[1:], start=2):
-                    r = {}
-                    for idx, h in enumerate(headers):
-                        val = str(row_values[idx]).strip() if idx < len(row_values) else ""
-                        r[h] = val
+                    for i, row_values in enumerate(all_rows[1:], start=2):
+                        r = {}
+                        for idx, h in enumerate(headers):
+                            val = str(row_values[idx]).strip() if idx < len(row_values) else ""
+                            r[h] = val
 
-                    if "condition_col" in src:
-                        cond_found = False
+                        if "condition_col" in src:
+                            cond_found = False
+                            for k, v in r.items():
+                                if src["condition_col"] in k and src["condition_val"] in v.lower():
+                                    cond_found = True
+                                    break
+                            if not cond_found:
+                                continue
+
+                        nev = ""
+                        email = ""
+                        phone = ""
+                        feldolgozva = ""
+                        extracted_info = []
+
                         for k, v in r.items():
-                            if src["condition_col"] in k and src["condition_val"] in v.lower():
-                                cond_found = True
-                                break
-                        if not cond_found:
+                            if not email and ("mail" in k or "e-mail" in k):
+                                email = v
+                            elif not phone and ("telefon" in k or "tel" in k or "mobil" in k):
+                                phone = v
+                            elif not nev and (
+                                "cégnév" in k
+                                or "név" in k
+                                or "nev" in k  
+                                or "cég" in k
+                                or "kapcsolattartó" in k
+                            ):
+                                nev = v
+                            elif "feldolgozva" in k or "status" in k:
+                                feldolgozva = v.upper()
+
+                        if feldolgozva in ["OK", "IGEN", "FELDOLGOZVA", "LEZÁRT"]:
                             continue
 
-                    nev = ""
-                    email = ""
-                    phone = ""
-                    feldolgozva = ""
-                    extracted_info = []
+                        if not email and not nev:
+                            continue
 
-                    for k, v in r.items():
-                        if not email and ("mail" in k or "e-mail" in k):
-                            email = v
-                        elif not phone and ("telefon" in k or "tel" in k or "mobil" in k):
-                            phone = v
-                        elif not nev and (
-                            "cégnév" in k
-                            or "név" in k
-                            or "nev" in k  
-                            or "cég" in k
-                            or "kapcsolattartó" in k
-                        ):
-                            nev = v
-                        elif "feldolgozva" in k or "status" in k:
-                            feldolgozva = v.upper()
+                        if not nev and email:
+                            nev = email.split("@")[0].capitalize()
 
-                    if feldolgozva in ["OK", "IGEN", "FELDOLGOZVA", "LEZÁRT"]:
-                        continue
+                        for k, v in r.items():
+                            if v and not any(
+                                skip in k
+                                for skip in [
+                                    "időbélyeg",
+                                    "timestamp",
+                                    "feldolgozva",
+                                    "cégnév",
+                                    "e-mail",
+                                    "email",
+                                    "telefonszám",
+                                    "tel",
+                                ]
+                            ):
+                                extracted_info.append(f"{v}")
 
-                    if not email and not nev:
-                        continue
-
-                    if not nev and email:
-                        nev = email.split("@")[0].capitalize()
-
-                    for k, v in r.items():
-                        if v and not any(
-                            skip in k
-                            for skip in [
-                                "időbélyeg",
-                                "timestamp",
-                                "feldolgozva",
-                                "cégnév",
-                                "e-mail",
-                                "email",
-                                "telefonszám",
-                                "tel",
-                            ]
-                        ):
-                            extracted_info.append(f"{v}")
-
-                    # MÓDOSÍTÁS ITT: A duplikációt most már forrásonként (source) vizsgáljuk!
-                    cursor.execute(
-                        "SELECT id FROM leads WHERE (email = ? OR (client_name = ? AND client_name != '')) AND source = ?",
-                        (email, nev, src["name"]),
-                    )
-                    existing = cursor.fetchone()
-
-                    if not existing:
                         auto_notes = (
                             " | ".join(extracted_info)
                             if extracted_info
                             else "Beérkezett kitöltés"
                         )
 
-                        cursor.execute(
-                            """
-                            INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
-                            VALUES (?, ?, ?, '', ?, ?, 'Új', ?)
-                            """,
-                            (nev, phone, email, nev, src["name"], auto_notes),
-                        )
-                        new_leads_count += 1
+                        # Idősávos (cooldown) szűrés beépítése!
+                        if src["name"] == "Ügyfél Évfordulók":
+                            cursor.execute(
+                                f"SELECT id FROM leads WHERE email = ? AND source = ? AND notes = ? AND created_at >= datetime('now', '-{cooldown} days')",
+                                (email, src["name"], auto_notes),
+                            )
+                        else:
+                            cursor.execute(
+                                f"SELECT id FROM leads WHERE (email = ? OR (client_name = ? AND client_name != '')) AND source = ? AND created_at >= datetime('now', '-{cooldown} days')",
+                                (email, nev, src["name"]),
+                            )
+                            
+                        existing = cursor.fetchone()
+
+                        if not existing:
+                            cursor.execute(
+                                """
+                                INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
+                                VALUES (?, ?, ?, '', ?, ?, 'Új', ?)
+                                """,
+                                (nev, phone, email, nev, src["name"], auto_notes),
+                            )
+                            new_leads_count += 1
 
             except Exception as err:
                 st.sidebar.error(f"❌ Hiba ({src['name']}): {err}")
@@ -291,7 +307,6 @@ def send_email_smtp(to_email, subject, html_content):
     with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
-
 
 def get_elfogado_email(nev):
     return f"""
@@ -442,24 +457,26 @@ if not st.session_state["user"]:
     st.title("💼 Alfa Arrabona CRM – Bejelentkezés")
     col1, col2 = st.columns([1, 2])
     with col1:
-        username = st.text_input("Felhasználónév (E-mail)")
-        password = st.text_input("Jelszó", type="password")
-        if st.button("Belépés", use_container_width=True, type="primary"):
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM users WHERE username = ? AND password = ? AND"
-                " is_active = 1",
-                (username.strip(), password.strip()),
-            )
-            user = cursor.fetchone()
-            conn.close()
+        with st.form("login_form"):
+            username = st.text_input("Felhasználónév (E-mail)")
+            password = st.text_input("Jelszó", type="password")
+            submitted = st.form_submit_button("Belépés", use_container_width=True, type="primary")
+            
+            if submitted:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM users WHERE username = ? AND password = ? AND is_active = 1",
+                    (username.strip(), password.strip()),
+                )
+                user = cursor.fetchone()
+                conn.close()
 
-            if user:
-                st.session_state["user"] = dict(user)
-                st.rerun()
-            else:
-                st.error("Hibás felhasználónév vagy jelszó!")
+                if user:
+                    st.session_state["user"] = dict(user)
+                    st.rerun()
+                else:
+                    st.error("Hibás felhasználónév vagy jelszó!")
     st.stop()
 
 current_user = st.session_state["user"]
@@ -484,23 +501,16 @@ if st.sidebar.button("🔄 Élő Google Sheets Szinkronizálás"):
     else:
         st.sidebar.info("Nincs új beolvasható lead.")
 
-if current_user["role"] in ["Igazgató", "Asszisztens"]:
-    if st.sidebar.button("🧹 Nyers/Hibás Leadek Törlése"):
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM leads WHERE status = 'Új'")
-        conn.commit()
-        conn.close()
-        st.sidebar.warning("Még nem kiosztott leadek törölve!")
-        st.rerun()
-
 if st.sidebar.button("🚪 Kijelentkezés"):
     st.session_state["user"] = None
     st.rerun()
 
+# Dinamikus menü felépítése a jogosultságok alapján
 menu_options = [
     "Saját Leadek / Dashboard",
+    "🗄️ Archívum (Lezárt leadek)",
     "Lead Kiosztás & Visszavétel",
+    "🗑️ Nyers Leadek Törlése",
     "Új Lead Feltöltés",
     "📥 Toborzási Form Kiértékelés",
     "Felhasználók Kezelése (Jogosultságok)",
@@ -513,24 +523,25 @@ menu = st.sidebar.radio("Navigáció", menu_options)
 # 5. MODULOK ÉS NÉZETEK
 # ==========================================
 
-if menu == "Saját Leadek / Dashboard":
-    st.title("📊 Saját Leadek és Visszajelzések")
+# Mivel a Dashboard és az Archívum nagyon hasonló, egy blokkban kezeljük őket
+if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
+    is_archive = (menu == "🗄️ Archívum (Lezárt leadek)")
+    st.title("🗄️ Archívum (Lezárt leadek)" if is_archive else "📊 Saját Leadek és Visszajelzések")
 
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'Új'")
-    unassigned_new_count = cursor.fetchone()[0]
-    conn.close()
+    
+    if not is_archive:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'Új'")
+        unassigned_new_count = cursor.fetchone()[0]
+        if unassigned_new_count > 0:
+            st.markdown(
+                f'<div class="new-lead-card">🎉 ÚJ LEAD GENERÁLÓDOTT! Jelenleg'
+                f" <strong>{unassigned_new_count} db</strong> még kiosztatlan új lead"
+                " várakozik a rendszerben!</div>",
+                unsafe_allow_html=True,
+            )
 
-    if unassigned_new_count > 0:
-        st.markdown(
-            f'<div class="new-lead-card">🎉 ÚJ LEAD GENERÁLÓDOTT! Jelenleg'
-            f" <strong>{unassigned_new_count} db</strong> még kiosztatlan új lead"
-            " várakozik a rendszerben!</div>",
-            unsafe_allow_html=True,
-        )
-
-    conn = get_db_connection()
     if current_user["role"] == "Igazgató" or (
         current_user["role"] == "Asszisztens"
         and "Összes lead" in active_role_view
@@ -570,6 +581,13 @@ if menu == "Saját Leadek / Dashboard":
 
     df = pd.read_sql_query(query, conn, params=params)
     conn.close()
+
+    if not df.empty:
+        # Szétválasztjuk az aktív és a lezárt leadeket
+        if is_archive:
+            df = df[df["status"].isin(["Sikeres kötés", "Lezárt"])]
+        else:
+            df = df[~df["status"].isin(["Sikeres kötés", "Lezárt"])]
 
     if not df.empty:
         st.subheader("🔍 Szűrők és Keresés")
@@ -723,7 +741,7 @@ if menu == "Saját Leadek / Dashboard":
             st.rerun()
 
     else:
-        st.info("Jelenleg nincs megjeleníthető lead.")
+        st.info("Jelenleg nincs megjeleníthető lead ebben a nézetben.")
 
 elif menu == "Lead Kiosztás & Visszavétel":
     st.title("🎯 Lead Kiosztás és Visszavétel")
@@ -735,7 +753,7 @@ elif menu == "Lead Kiosztás & Visszavétel":
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM leads WHERE status != 'Lezárt' ORDER BY id DESC"
+        "SELECT * FROM leads WHERE status != 'Lezárt' AND status != 'Sikeres kötés' ORDER BY id DESC"
     )
     leads = cursor.fetchall()
 
@@ -871,6 +889,45 @@ elif menu == "Lead Kiosztás & Visszavétel":
                     conn.close()
                     st.success("Lead sikeresen frissítve / kiosztva!")
                     st.rerun()
+
+elif menu == "🗑️ Nyers Leadek Törlése":
+    st.title("🗑️ Nyers/Hibás Leadek Szelektív Törlése")
+
+    if current_user["role"] not in ["Igazgató", "Asszisztens"]:
+        st.warning("Nincs jogosultságod ehhez a menüponthoz.")
+        st.stop()
+
+    conn = get_db_connection()
+    df_new = pd.read_sql_query("SELECT * FROM leads WHERE status = 'Új' ORDER BY id DESC", conn)
+
+    if df_new.empty:
+        st.info("Jelenleg nincs 'Új' státuszú, kiosztatlan lead a rendszerben.")
+    else:
+        st.write("Válaszd ki azokat a hibás vagy felesleges leadeket, amiket **véglegesen** törölni szeretnél az adatbázisból:")
+        
+        selected_ids_to_delete = []
+        for _, row in df_new.iterrows():
+            chk = st.checkbox(
+                f"[{row['source']}] {row['client_name']} ({row['email']}) - Tel: {row['phone']} - Infó: {row['notes']}", 
+                key=f"del_{row['id']}"
+            )
+            if chk:
+                selected_ids_to_delete.append(row['id'])
+        
+        st.divider()
+        if st.button("🗑️ Kijelölt leadek végleges törlése", type="primary"):
+            if selected_ids_to_delete:
+                cursor = conn.cursor()
+                placeholders = ",".join("?" * len(selected_ids_to_delete))
+                cursor.execute(f"DELETE FROM leads WHERE id IN ({placeholders})", selected_ids_to_delete)
+                conn.commit()
+                st.success(f"{len(selected_ids_to_delete)} db lead sikeresen törölve!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.warning("Nem jelöltél ki egyetlen leadet sem a törléshez!")
+    conn.close()
+
 
 elif menu == "Új Lead Feltöltés":
     st.title("➕ Új Lead Manuális Hozzáadása")
