@@ -69,7 +69,7 @@ SENDER_PASSWORD = "aqzs okrl jewl ypdw"
 
 RECRUITMENT_FORM_SPREADSHEET_ID = (
     "1hlFrgfdUDANg1m2gIA6w_10kI5ODQ_TIw8v9-WmYf-g"
-)
+)s
 POSSIBLE_FORM_SHEETS = [
     "Form Responses 1",
     "Űrlapválaszok 1",
@@ -116,7 +116,7 @@ def init_db():
     if cursor.fetchone()[0] == 0:
         cursor.execute("""
             INSERT INTO users (username, password, name, role, is_active)
-            VALUES ('admin', 'admin123', 'Főigazgató', 'Igazgató', 1)
+            VALUES ('admin', 'admin123', 'Strem Tamás', 'Igazgató', 1)
         """)
     conn.commit()
     conn.close()
