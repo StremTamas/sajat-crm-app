@@ -69,7 +69,7 @@ SENDER_PASSWORD = "aqzs okrl jewl ypdw"
 
 RECRUITMENT_FORM_SPREADSHEET_ID = (
     "1hlFrgfdUDANg1m2gIA6w_10kI5ODQ_TIw8v9-WmYf-g"
-)s
+)
 POSSIBLE_FORM_SHEETS = [
     "Form Responses 1",
     "Űrlapválaszok 1",
