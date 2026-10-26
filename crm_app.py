@@ -956,11 +956,19 @@ elif menu == "🚀 Kampány E-mailek Kiküldése":
                 colA, colB = st.columns(2)
                 with colA:
                     st.caption("Fő fotó (Fejléc):")
-                    st.image(current_setting.get('Fő fotó URL', ''), width=150)
+                    fofoto = current_setting.get('Fő fotó URL', '')
+                    if fofoto and str(fofoto).strip().startswith('http'):
+                        st.image(fofoto.strip(), width=150)
+                    else:
+                        st.info("Nincs megadva érvényes Fő fotó URL a Google Sheetben.")
                 with colB:
                     st.caption("Aláíró portré:")
-                    st.image(current_setting.get('Aláíró Fotó URL', ''), width=80)
-            
+                    portre = current_setting.get('Aláíró Fotó URL', '')
+                    if portre and str(portre).strip().startswith('http'):
+                        st.image(portre.strip(), width=80)
+                    else:
+                        st.info("Nincs megadva érvényes Aláíró fotó URL.")
+                        
             st.subheader("2. E-mail szövegének megírása")
             message_body = st.text_area(
                 "Írd be az üzenet szövegét. A bekezdéseket és sortöréseket a rendszer automatikusan formázza a levélben:",
