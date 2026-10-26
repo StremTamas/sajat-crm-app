@@ -67,6 +67,13 @@ SENDER_EMAIL = "arrabonainsurance@gmail.com"
 SENDER_NAME = "Insurance Arrabona"
 SENDER_PASSWORD = "aqzs okrl jewl ypdw"
 
+# --- E-MAIL KÉPEK LINKEI (TARTALÉK AZ AUTOMATA TOBORZÁSHOZ) ---
+LOGO_URL = "https://lh3.googleusercontent.com/d/IDE_JON_A_LOGO_ID"
+PORTRAIT_URL = "https://lh3.googleusercontent.com/d/IDE_JON_AZ_ARCKEP_ID"
+
+# --- GOOGLE SHEET AZONOSÍTÓK ---
+CRM_BEALLITASOK_SHEET_ID = "1XwKnEFG5w7y0iFhBksiwQn62E3pLQBv0UwK_258T4Ng"
+
 RECRUITMENT_FORM_SPREADSHEET_ID = (
     "1hlFrgfdUDANg1m2gIA6w_10kI5ODQ_TIw8v9-WmYf-g"
 )
@@ -126,7 +133,6 @@ init_db()
 # ==========================================
 # 2. HIVATALOS ADATFORRÁSOK 
 # ==========================================
-# Itt tudod módosítani a cooldown_days (várakozási idő napokban) értékét!
 SHEET_SOURCES = [
     {
         "name": "Vállalkozói Felmérés Válaszok",
@@ -181,7 +187,6 @@ def sync_google_sheets_to_crm():
                 spreadsheet = client.open_by_key(src["id"])
                 cooldown = src.get("cooldown_days", 30)
                 
-                # Végigmegyünk az ÖSSZES munkalapon (fülön) a táblázaton belül
                 for sheet in spreadsheet.worksheets():
                     all_rows = sheet.get_all_values()
 
@@ -258,7 +263,6 @@ def sync_google_sheets_to_crm():
                             else "Beérkezett kitöltés"
                         )
 
-                        # Idősávos (cooldown) szűrés beépítése!
                         if src["name"] == "Ügyfél Évfordulók":
                             cursor.execute(
                                 f"SELECT id FROM leads WHERE email = ? AND source = ? AND notes = ? AND created_at >= datetime('now', '-{cooldown} days')",
@@ -297,6 +301,16 @@ def sync_google_sheets_to_crm():
 # ==========================================
 # 3. KIÉRTÉKELŐ ÉS E-MAIL KÜLDŐ SEGÉDFÜGGVÉNYEK
 # ==========================================
+def get_campaign_settings():
+    """A Google Sheet 'CRM_Beallitasok' fülének beolvasása"""
+    try:
+        gc = get_gspread_client()
+        sheet = gc.open_by_key(CRM_BEALLITASOK_SHEET_ID).worksheet("CRM_Beallitasok")
+        return sheet.get_all_records()
+    except Exception as e:
+        st.error(f"Hiba a kampány beállítások betöltésekor: {e}")
+        return []
+
 def send_email_smtp(to_email, subject, html_content):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -311,13 +325,28 @@ def send_email_smtp(to_email, subject, html_content):
 def get_elfogado_email(nev):
     return f"""
     <html>
-    <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6;">
+    <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <img src="{LOGO_URL}" alt="Alfa VIG Logo" style="max-height: 70px;">
+        </div>
         <p>Kedves {nev}!</p>
         <p>Köszönjük, hogy kitöltötte a kérdőívünket!</p>
         <p>Örömmel értesítjük, hogy a válaszai alapján a profilja megfelel a győri Alfa VIG értékesítési és tanácsadói csapat elvárásainak.</p>
         <p>Kollégánk 2 munkanapon belül keresni fogja Önt a megadott telefonszámon a személyes interjú időpontjának egyeztetése céljából.</p>
-        <br>
-        <p>Üdvözlettel,<br><strong>Strem Tamás</strong><br>Területi Igazgató<br><em>Alfa Vienna Insurance Group – Győri Régió</em></p>
+        
+        <table style="margin-top: 40px; border-collapse: collapse;">
+            <tr>
+                <td style="padding-right: 20px; vertical-align: top;">
+                    <img src="{PORTRAIT_URL}" alt="Strem Tamás" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover;">
+                </td>
+                <td style="vertical-align: middle;">
+                    <p style="margin: 0; font-size: 14px; color: #555555;">Üdvözlettel,</p>
+                    <p style="margin: 5px 0 0 0; font-size: 16px;"><strong>Strem Tamás</strong></p>
+                    <p style="margin: 2px 0 0 0; font-size: 14px; color: #777777;">Területi Igazgató</p>
+                    <p style="margin: 2px 0 0 0; font-size: 13px; color: #999999;"><em>Alfa Vienna Insurance Group – Győri Régió</em></p>
+                </td>
+            </tr>
+        </table>
     </body>
     </html>
     """
@@ -325,13 +354,28 @@ def get_elfogado_email(nev):
 def get_elutasito_email(nev):
     return f"""
     <html>
-    <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6;">
+    <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+            <img src="{LOGO_URL}" alt="Alfa VIG Logo" style="max-height: 70px;">
+        </div>
         <p>Kedves {nev}!</p>
         <p>Köszönjük, hogy időt szánt a kérdőívünk kitöltésére és érdeklődött a győri Alfa VIG karrierlehetőségei iránt.</p>
         <p>Sajnálattal tájékoztatjuk, hogy a jelenlegi nyitott pozícióinkhoz elengedhetetlen a vállalkozói jogviszony keretében történő együttműködés. Mivel Ön jelzése alapján kizárólag főállású/alkalmazotti jogviszonyban gondolkodik, így jelenleg nem tudjuk tovabléptetni a kiválasztási folyamatban.</p>
         <p>Sok sikert kívánunk a további álláskereséséhez!</p>
-        <br>
-        <p>Üdvözlettel,<br><strong>Strem Tamás</strong><br>Területi Igazgató<br><em>Alfa Vienna Insurance Group – Győri Régió</em></p>
+        
+        <table style="margin-top: 40px; border-collapse: collapse;">
+            <tr>
+                <td style="padding-right: 20px; vertical-align: top;">
+                    <img src="{PORTRAIT_URL}" alt="Strem Tamás" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover;">
+                </td>
+                <td style="vertical-align: middle;">
+                    <p style="margin: 0; font-size: 14px; color: #555555;">Üdvözlettel,</p>
+                    <p style="margin: 5px 0 0 0; font-size: 16px;"><strong>Strem Tamás</strong></p>
+                    <p style="margin: 2px 0 0 0; font-size: 14px; color: #777777;">Területi Igazgató</p>
+                    <p style="margin: 2px 0 0 0; font-size: 13px; color: #999999;"><em>Alfa Vienna Insurance Group – Győri Régió</em></p>
+                </td>
+            </tr>
+        </table>
     </body>
     </html>
     """
@@ -510,6 +554,7 @@ menu_options = [
     "Saját Leadek / Dashboard",
     "🗄️ Archívum (Lezárt leadek)",
     "Lead Kiosztás & Visszavétel",
+    "🚀 Kampány E-mailek Kiküldése",
     "🗑️ Nyers Leadek Törlése",
     "Új Lead Feltöltés",
     "📥 Toborzási Form Kiértékelés",
@@ -523,7 +568,6 @@ menu = st.sidebar.radio("Navigáció", menu_options)
 # 5. MODULOK ÉS NÉZETEK
 # ==========================================
 
-# Mivel a Dashboard és az Archívum nagyon hasonló, egy blokkban kezeljük őket
 if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
     is_archive = (menu == "🗄️ Archívum (Lezárt leadek)")
     st.title("🗄️ Archívum (Lezárt leadek)" if is_archive else "📊 Saját Leadek és Visszajelzések")
@@ -583,7 +627,6 @@ if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
     conn.close()
 
     if not df.empty:
-        # Szétválasztjuk az aktív és a lezárt leadeket
         if is_archive:
             df = df[df["status"].isin(["Sikeres kötés", "Lezárt"])]
         else:
@@ -889,6 +932,110 @@ elif menu == "Lead Kiosztás & Visszavétel":
                     conn.close()
                     st.success("Lead sikeresen frissítve / kiosztva!")
                     st.rerun()
+
+# --- ÚJ MODUL: KAMPÁNY E-MAILEK KIKÜLDÉSE ---
+elif menu == "🚀 Kampány E-mailek Kiküldése":
+    st.title("🚀 Kampány E-mailek Dinamikus Kiküldése")
+    st.write("Válaszd ki a kampányt, írd meg az üzenetet, és küldd ki a Google Sheetben beállított arculattal és képekkel!")
+    
+    settings_data = get_campaign_settings()
+    
+    if not settings_data:
+        st.warning("⚠️ Nem sikerült beolvasni a kampány beállításokat. Ellenőrizd a Google Sheet ID-t és hogy létezik-e a 'CRM_Beallitasok' fül!")
+    else:
+        campaign_names = [s.get("Kampány neve", "") for s in settings_data if s.get("Kampány neve")]
+        
+        selected_campaign = st.selectbox("1. Válaszd ki a Kampányt / Modult:", options=campaign_names)
+        
+        current_setting = next((s for s in settings_data if s.get("Kampány neve") == selected_campaign), None)
+        
+        if current_setting:
+            with st.expander("📋 Kattints ide a Google Sheetben megadott arculat / beállítások ellenőrzéséhez", expanded=False):
+                st.write(f"**Tárgy:** {current_setting.get('E-mail Tárgya', '')}")
+                st.write(f"**Aláíró:** {current_setting.get('Aláíró Neve', '')} - {current_setting.get('Aláíró Titulusa', '')}")
+                colA, colB = st.columns(2)
+                with colA:
+                    st.caption("Fő fotó (Fejléc):")
+                    st.image(current_setting.get('Fő fotó URL', ''), width=150)
+                with colB:
+                    st.caption("Aláíró portré:")
+                    st.image(current_setting.get('Aláíró Fotó URL', ''), width=80)
+            
+            st.subheader("2. E-mail szövegének megírása")
+            message_body = st.text_area(
+                "Írd be az üzenet szövegét. A bekezdéseket és sortöréseket a rendszer automatikusan formázza a levélben:",
+                height=250,
+                placeholder="Kedves [Név]! (A megszólítást a rendszer automatikusan beilleszti a név alapján!)\n\nÖrömmel értesítjük..."
+            )
+            
+            st.subheader("3. Címzettek kiválasztása")
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM leads WHERE (status = 'Új' OR status = 'Kiosztva') AND email != ''")
+            all_leads = cursor.fetchall()
+            conn.close()
+            
+            lead_opts = {l["id"]: f"[{l['source']}] {l['client_name']} ({l['email']})" for l in all_leads}
+            
+            # Alapból kiválasztjuk azokat a leadeket, akiknek a forrása pont ez a kampány
+            default_leads = [l["id"] for l in all_leads if l['source'] == selected_campaign]
+            
+            selected_lead_ids = st.multiselect(
+                "A rendszer alapból felajánlja a kampányhoz tartozó aktív leadeket (de a listát szabadon módosíthatod):", 
+                options=list(lead_opts.keys()), 
+                format_func=lambda x: lead_opts[x], 
+                default=default_leads
+            )
+            
+            st.divider()
+            
+            if st.button("📧 Levelek Kiküldése most", type="primary"):
+                if not message_body.strip():
+                    st.error("Kérlek, írj valamilyen szöveget az e-mailbe!")
+                elif not selected_lead_ids:
+                    st.warning("Nincs kiválasztva egyetlen címzett sem!")
+                else:
+                    with st.spinner("Levelek kiküldése folyamatban..."):
+                        sent_count = 0
+                        for lid in selected_lead_ids:
+                            lead = next(l for l in all_leads if l["id"] == lid)
+                            email_to = lead["email"]
+                            nev = lead["client_name"]
+                            
+                            formatted_body = message_body.replace('\n', '<br>')
+                            
+                            html_content = f"""
+                            <html>
+                            <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333333; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
+                                <div style="text-align: center; margin-bottom: 30px;">
+                                    <img src="{current_setting.get('Fő fotó URL', '')}" alt="Kampány Kép" style="max-height: 150px;">
+                                </div>
+                                <p>Kedves {nev}!</p>
+                                <p>{formatted_body}</p>
+                                <table style="margin-top: 40px; border-collapse: collapse;">
+                                    <tr>
+                                        <td style="padding-right: 20px; vertical-align: top;">
+                                            <img src="{current_setting.get('Aláíró Fotó URL', '')}" alt="Profilkép" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover;">
+                                        </td>
+                                        <td style="vertical-align: middle;">
+                                            <p style="margin: 0; font-size: 14px; color: #555555;">Üdvözlettel,</p>
+                                            <p style="margin: 5px 0 0 0; font-size: 16px;"><strong>{current_setting.get('Aláíró Neve', '')}</strong></p>
+                                            <p style="margin: 2px 0 0 0; font-size: 14px; color: #777777;">{current_setting.get('Aláíró Titulusa', '')}</p>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </body>
+                            </html>
+                            """
+                            try:
+                                send_email_smtp(email_to, current_setting.get('E-mail Tárgya', ''), html_content)
+                                sent_count += 1
+                                time.sleep(random.uniform(1.0, 2.5)) # Rövid anti-spam szünet a levelek között
+                            except Exception as e:
+                                st.error(f"Hiba a levél küldésekor ({email_to}): {e}")
+                        
+                        st.balloons()
+                        st.success(f"Gartulálok! {sent_count} db személyre szabott, HTML formátumú e-mail sikeresen kiküldve!")
 
 elif menu == "🗑️ Nyers Leadek Törlése":
     st.title("🗑️ Nyers/Hibás Leadek Szelektív Törlése")
