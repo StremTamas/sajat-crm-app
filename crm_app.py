@@ -194,6 +194,13 @@ def sync_google_sheets_to_crm():
                         continue
 
                     headers = [str(h).strip().lower() for h in all_rows[0]]
+                    
+                    # ÚJ: Megkeressük a 'feldolgozva' oszlop indexét (A gspread 1-től indexel, ezért +1)
+                    feldolgozva_col_idx = None
+                    for idx, h in enumerate(headers):
+                        if "feldolgozva" in h or "status" in h:
+                            feldolgozva_col_idx = idx + 1
+                            break
 
                     for i, row_values in enumerate(all_rows[1:], start=2):
                         r = {}
@@ -268,7 +275,7 @@ def sync_google_sheets_to_crm():
                             else "Beérkezett kitöltés"
                         )
 
-                        # JAVÍTOTT DUPLIKÁCIÓ SZŰRÉS (Ne akadjon fent az üres stringeken)
+                        # DUPLIKÁCIÓ SZŰRÉS 
                         if src["name"] == "Ügyfél Évfordulók":
                             cursor.execute(
                                 f"SELECT id FROM leads WHERE email != '' AND email = ? AND source = ? AND notes = ? AND created_at >= datetime('now', '-{cooldown} days')",
@@ -296,6 +303,15 @@ def sync_google_sheets_to_crm():
                                 (nev, phone, email, nev, src["name"], auto_notes),
                             )
                             new_leads_count += 1
+                            
+                            # ÚJ RÉSZ: Beírjuk a Google Sheetbe, hogy feldolgozva
+                            if feldolgozva_col_idx:
+                                try:
+                                    sheet.update_cell(i, feldolgozva_col_idx, "OK")
+                                    # Egy minimális szünet, hogy a Google API ne tiltson le a túl gyors kérések miatt
+                                    time.sleep(1)
+                                except Exception as err:
+                                    st.sidebar.warning(f"Nem sikerült beírni az OK-t a Sheetbe a(z) {nev} ügyfélnél: {err}")
 
             except Exception as err:
                 st.sidebar.error(f"❌ Hiba ({src['name']}): {err}")
@@ -307,7 +323,6 @@ def sync_google_sheets_to_crm():
     except Exception as e:
         st.sidebar.error(f"❌ Általános hiba: {e}")
         return 0
-
 
 # ==========================================
 # 3. KIÉRTÉKELŐ ÉS E-MAIL KÜLDŐ SEGÉDFÜGGVÉNYEK
