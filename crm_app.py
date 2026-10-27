@@ -227,6 +227,7 @@ def sync_google_sheets_to_crm():
                                 or "nev" in k  
                                 or "cég" in k
                                 or "kapcsolattartó" in k
+                                or "vállalkozás" in k
                             ):
                                 nev = v
                             elif "feldolgozva" in k or "status" in k:
@@ -235,11 +236,15 @@ def sync_google_sheets_to_crm():
                         if feldolgozva in ["OK", "IGEN", "FELDOLGOZVA", "LEZÁRT"]:
                             continue
 
-                        if not email and not nev:
+                        # Megerősített vizsgálat: ha semmi sincs, ugrunk
+                        if not email and not nev and not phone:
                             continue
 
+                        # Ha nincs név, de van e-mail vagy telefon, pótoljuk
                         if not nev and email:
                             nev = email.split("@")[0].capitalize()
+                        elif not nev and phone:
+                            nev = f"Ismeretlen érdeklődő (Tel: {phone})"
 
                         for k, v in r.items():
                             if v and not any(
@@ -263,15 +268,21 @@ def sync_google_sheets_to_crm():
                             else "Beérkezett kitöltés"
                         )
 
+                        # JAVÍTOTT DUPLIKÁCIÓ SZŰRÉS (Ne akadjon fent az üres stringeken)
                         if src["name"] == "Ügyfél Évfordulók":
                             cursor.execute(
-                                f"SELECT id FROM leads WHERE email = ? AND source = ? AND notes = ? AND created_at >= datetime('now', '-{cooldown} days')",
+                                f"SELECT id FROM leads WHERE email != '' AND email = ? AND source = ? AND notes = ? AND created_at >= datetime('now', '-{cooldown} days')",
                                 (email, src["name"], auto_notes),
                             )
                         else:
                             cursor.execute(
-                                f"SELECT id FROM leads WHERE (email = ? OR (client_name = ? AND client_name != '')) AND source = ? AND created_at >= datetime('now', '-{cooldown} days')",
-                                (email, nev, src["name"]),
+                                f"""SELECT id FROM leads 
+                                   WHERE ((email != '' AND email = ?) 
+                                          OR (client_name != '' AND client_name = ?)
+                                          OR (phone != '' AND phone = ?))
+                                     AND source = ? 
+                                     AND created_at >= datetime('now', '-{cooldown} days')""",
+                                (email, nev, phone, src["name"]),
                             )
                             
                         existing = cursor.fetchone()
@@ -600,17 +611,19 @@ if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
         """
         params = ()
     elif current_user["role"] == "Manager":
+        # JAVÍTOTT Menedzser Dashboard Query
         query = """
             SELECT l.id, l.client_name, l.phone, l.email, l.address, l.contact_person, 
                    l.source, l.status, l.created_at, l.notes,
                    COALESCE(u.name, 'Nincs kiosztva') AS advisor_name
             FROM leads l
             LEFT JOIN users u ON l.assigned_advisor_id = u.id
-            WHERE l.assigned_manager_id = ? 
+            WHERE l.assigned_advisor_id = ? 
+               OR l.assigned_manager_id = ? 
                OR l.assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = ?)
             ORDER BY l.id DESC
         """
-        params = (current_user["id"], current_user["id"])
+        params = (current_user["id"], current_user["id"], current_user["id"])
     else:
         query = """
             SELECT l.id, l.client_name, l.phone, l.email, l.address, l.contact_person, 
@@ -795,13 +808,37 @@ elif menu == "Lead Kiosztás & Visszavétel":
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM leads WHERE status != 'Lezárt' AND status != 'Sikeres kötés' ORDER BY id DESC"
-    )
-    leads = cursor.fetchall()
+    
+    # --- JAVÍTÁS: Szerepkör alapú hierarchia a kiosztó nézetben is ---
+    if current_user["role"] in ["Igazgató", "Asszisztens"]:
+        cursor.execute(
+            "SELECT * FROM leads WHERE status != 'Lezárt' AND status != 'Sikeres kötés' ORDER BY id DESC"
+        )
+        leads = cursor.fetchall()
+        
+        # Igazgató / Asszisztens minden aktív kollégának oszthat leadeket
+        cursor.execute("SELECT id, name, role FROM users WHERE is_active = 1")
+        staff = cursor.fetchall()
+    else:
+        # Menedzser csak a saját és beosztottjai leadjeit látja
+        cursor.execute(
+            """SELECT * FROM leads 
+               WHERE status != 'Lezárt' AND status != 'Sikeres kötés' 
+                 AND (assigned_advisor_id = ? 
+                      OR assigned_manager_id = ? 
+                      OR assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = ?))
+               ORDER BY id DESC""",
+            (current_user["id"], current_user["id"], current_user["id"])
+        )
+        leads = cursor.fetchall()
 
-    cursor.execute("SELECT id, name, role FROM users WHERE is_active = 1")
-    staff = cursor.fetchall()
+        # Menedzser csak magának vagy a saját csapatának oszthat tovább
+        cursor.execute(
+            "SELECT id, name, role FROM users WHERE is_active = 1 AND (id = ? OR manager_id = ?)", 
+            (current_user["id"], current_user["id"])
+        )
+        staff = cursor.fetchall()
+        
     conn.close()
 
     staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
