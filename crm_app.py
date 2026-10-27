@@ -897,10 +897,17 @@ elif menu == "Lead Kiosztás & Visszavétel":
         st.caption(
             f"Jelöld ki a csoportosan kiosztandó leadeket (Összesen: {len(filtered_leads)} db):"
         )
+        
+        # --- ÚJ: Összes kijelölése gomb ---
+        select_all = st.checkbox("☑️ **Összes megjelenített lead kijelölése**", key="bulk_select_all")
+        st.divider()
+
         for l in filtered_leads:
+            # Ha a select_all be van pipálva, az összes lead alapértelmezett értéke True lesz
             is_checked = st.checkbox(
                 f"[{l['source']}] {l['client_name']} ({l['email']}) — Infó:"
                 f" {l['notes'] if l['notes'] else 'Nincs'} — Status: {l['status']}",
+                value=select_all,
                 key=f"chk_{l['id']}",
             )
             if is_checked:
@@ -921,12 +928,28 @@ elif menu == "Lead Kiosztás & Visszavétel":
                     params = [bulk_target_staff, new_stat] + selected_lead_ids
 
                     cursor.execute(query, params)
+                    
+                    # --- ÚJ: E-mail küldése a tanácsadónak a csoportos kiosztásról ---
+                    if bulk_target_staff is not None:
+                        cursor.execute("SELECT name, username FROM users WHERE id = ?", (bulk_target_staff,))
+                        t_user = cursor.fetchone()
+                        if t_user:
+                            t_nev = t_user["name"]
+                            t_email = t_user["username"] # A belépési név az e-mail cím
+                            subject = f"Új leadek ({len(selected_lead_ids)} db) kiosztva részedre - Alfa CRM"
+                            body = f"<p>Kedves {t_nev}!</p><p>Kiosztásra került részedre <b>{len(selected_lead_ids)} db új lead</b> a CRM rendszerben.</p><p>Kérlek, lépj be a rendszerbe és kezdd el a feldolgozásukat!</p>"
+                            try:
+                                send_email_smtp(t_email, subject, body)
+                            except Exception as e:
+                                st.warning("A leadek kiosztva, de az értesítő e-mailt nem sikerült elküldeni.")
+
                     conn.commit()
                     conn.close()
 
                     st.success(
-                        f"Sikeresen kiosztva/módosítva {len(selected_lead_ids)} db lead!"
+                        f"Sikeresen kiosztva {len(selected_lead_ids)} db lead, és az értesítő e-mail kiküldve!"
                     )
+                    time.sleep(2)
                     st.rerun()
                 else:
                     st.warning("Előbb jelölj ki legalább egy leadet a listából!")
@@ -980,9 +1003,25 @@ elif menu == "Lead Kiosztás & Visszavétel":
                         " ?",
                         (selected_staff, new_stat, l["id"]),
                     )
+                    
+                    # --- ÚJ: E-mail küldése a tanácsadónak egyedi kiosztásról ---
+                    if selected_staff is not None and selected_staff != current_assigned:
+                        cursor.execute("SELECT name, username FROM users WHERE id = ?", (selected_staff,))
+                        t_user = cursor.fetchone()
+                        if t_user:
+                            t_nev = t_user["name"]
+                            t_email = t_user["username"]
+                            subject = "Új lead kiosztva - Alfa CRM"
+                            body = f"<p>Kedves {t_nev}!</p><p>Kiosztásra került részedre egy új lead a CRM rendszerben.</p><p><b>Ügyfél neve:</b> {l['client_name']}<br><b>Forrás:</b> {l['source']}</p><p>Kérlek, lépj be a rendszerbe és vedd fel vele a kapcsolatot!</p>"
+                            try:
+                                send_email_smtp(t_email, subject, body)
+                            except:
+                                pass
+
                     conn.commit()
                     conn.close()
-                    st.success("Lead sikeresen frissítve / kiosztva!")
+                    st.success("Lead sikeresen frissítve, értesítés elküldve!")
+                    time.sleep(1)
                     st.rerun()
 
 # --- ÚJ MODUL: KAMPÁNY E-MAILEK KIKÜLDÉSE ---
