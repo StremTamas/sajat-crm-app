@@ -93,6 +93,10 @@ POSSIBLE_FORM_SHEETS = [
 
 # --- ADATBÁZIS CSATLAKOZÁS (POSTGRESQL / SUPABASE) ---
 def get_db_connection():
+    if "DATABASE_URL" not in st.secrets:
+        st.error("⛔ Hiányzik a DATABASE_URL a Streamlit Secrets legfelső sorából!")
+        st.info("Kérlek ellenőrizd, hogy a DATABASE_URL a Secrets mező legelső sorában szerepel-e, még a [gcp_service_account] előtt!")
+        st.stop()
     conn = psycopg2.connect(st.secrets["DATABASE_URL"], cursor_factory=RealDictCursor)
     return conn
 
