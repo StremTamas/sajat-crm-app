@@ -884,6 +884,7 @@ elif menu == "Lead Kiosztás & Visszavétel":
 
     with tab1:
         st.subheader("⚡ Tömeges Lead Kiosztás")
+        
         b_col1, b_col2 = st.columns([3, 2])
         with b_col1:
             bulk_target_staff = st.selectbox(
@@ -894,29 +895,65 @@ elif menu == "Lead Kiosztás & Visszavétel":
             )
 
         selected_lead_ids = []
-        st.caption(
-            f"Jelöld ki a csoportosan kiosztandó leadeket (Összesen: {len(filtered_leads)} db):"
-        )
         
-        # --- ÚJ: Összes kijelölése gomb ---
-        select_all = st.checkbox("☑️ **Összes megjelenített lead kijelölése**", key="bulk_select_all")
-        st.divider()
-
-        for l in filtered_leads:
-            # Ha a select_all be van pipálva, az összes lead alapértelmezett értéke True lesz
-            is_checked = st.checkbox(
-                f"[{l['source']}] {l['client_name']} ({l['email']}) — Infó:"
-                f" {l['notes'] if l['notes'] else 'Nincs'} — Status: {l['status']}",
-                value=select_all,
-                key=f"chk_{l['id']}",
+        if not filtered_leads:
+            st.info("Nincs kiosztható lead a jelenlegi szűrések alapján.")
+        else:
+            st.caption(
+                f"Jelöld ki a csoportosan kiosztandó leadeket (Összesen: {len(filtered_leads)} db):"
             )
-            if is_checked:
-                selected_lead_ids.append(l["id"])
+            
+            # --- 1. Összes kijelölése gomb a táblázat felett ---
+            select_all = st.checkbox("☑️ **Összes megjelenített lead kijelölése**", key="bulk_select_all")
+            
+            # --- 2. DataFrame felépítése a listából ---
+            df_bulk = pd.DataFrame(filtered_leads)
+            
+            # Szükséges oszlopok kiválogatása és átnevezése a szép megjelenítéshez
+            df_bulk = df_bulk[['id', 'client_name', 'email', 'phone', 'source', 'status', 'notes']]
+            df_bulk = df_bulk.rename(columns={
+                'client_name': 'Név / Cégnév',
+                'email': 'E-mail',
+                'phone': 'Telefon',
+                'source': 'Forrás',
+                'status': 'Státusz',
+                'notes': 'Infó'
+            })
+            
+            # Kijelölő logikai oszlop hozzáadása az elejére, a 'select_all' állapotával
+            df_bulk.insert(0, "Kijelölve", select_all)
+            
+            # --- 3. Interaktív táblázat megjelenítése ---
+            # Az 'id' oszlopot elrejtjük a felhasználók elől, de a háttérben megmarad az azonosításhoz
+            edited_df = st.data_editor(
+                df_bulk,
+                column_config={
+                    "Kijelölve": st.column_config.CheckboxColumn(
+                        "Kijelölve",
+                        help="Jelöld be a kiosztáshoz",
+                        default=False,
+                    ),
+                    "id": None, 
+                },
+                # A többi oszlopot írásvédetté tesszük, hogy véletlenül ne írják át
+                disabled=["Név / Cégnév", "E-mail", "Telefon", "Forrás", "Státusz", "Infó"],
+                hide_index=True,
+                use_container_width=True,
+                key="bulk_data_editor"
+            )
+            
+            # --- 4. Kijelölt ID-k valós idejű kinyerése a táblázatból ---
+            selected_lead_ids = edited_df[edited_df["Kijelölve"] == True]["id"].tolist()
 
         with b_col2:
+            st.write("") # Kicsi térköz az igazításhoz
+            st.write("")
+            
+            # A gomb felirata azonnal követi a szerkesztett táblázat adatait
             if st.button(
                 f"🚀 Kijelölt {len(selected_lead_ids)} db lead kiosztása",
                 type="primary",
+                disabled=len(selected_lead_ids) == 0 # Nem lehet kattintani, ha 0 darab van kijelölve
             ):
                 if selected_lead_ids:
                     conn = get_db_connection()
@@ -929,13 +966,13 @@ elif menu == "Lead Kiosztás & Visszavétel":
 
                     cursor.execute(query, params)
                     
-                    # --- ÚJ: E-mail küldése a tanácsadónak a csoportos kiosztásról ---
+                    # E-mail küldése a tanácsadónak a csoportos kiosztásról
                     if bulk_target_staff is not None:
                         cursor.execute("SELECT name, username FROM users WHERE id = ?", (bulk_target_staff,))
                         t_user = cursor.fetchone()
                         if t_user:
                             t_nev = t_user["name"]
-                            t_email = t_user["username"] # A belépési név az e-mail cím
+                            t_email = t_user["username"]
                             subject = f"Új leadek ({len(selected_lead_ids)} db) kiosztva részedre - Alfa CRM"
                             body = f"<p>Kedves {t_nev}!</p><p>Kiosztásra került részedre <b>{len(selected_lead_ids)} db új lead</b> a CRM rendszerben.</p><p>Kérlek, lépj be a rendszerbe és kezdd el a feldolgozásukat!</p>"
                             try:
@@ -951,8 +988,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
                     )
                     time.sleep(2)
                     st.rerun()
-                else:
-                    st.warning("Előbb jelölj ki legalább egy leadet a listából!")
 
     with tab2:
         st.subheader("📝 Leadek Egyenkénti Kezelése")
