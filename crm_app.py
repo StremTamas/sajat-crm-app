@@ -821,6 +821,87 @@ elif menu == "Lead Kiosztás & Visszavétel":
         st.warning("Ehhez a menüponthoz nincs jogosultságod.")
         st.stop()
 
+    # ==========================================================
+    # --- ÚJ: NAGY PIROS GOMB (48 ÓRÁS RIASZTÁS KIKÜLDÉSE) ---
+    # ==========================================================
+    st.markdown(
+        """
+        <style>
+        .red-alert-box {
+            background-color: #ffe5e5;
+            border-left: 5px solid #ff4b4b;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            color: #900000;
+        }
+        </style>
+        <div class="red-alert-box">
+            <strong>🚨 48 Órás Elakadt Leadek Riasztása</strong><br>
+            Ez a gomb megkeresi azokat a leadeket, amelyeket több mint 48 órája osztottak ki, de még mindig "Kiosztva" státuszban vannak. Automatikus figyelmeztető e-mailt küld az érintett felelős tanácsadóknak az elmaradt hívásokról.
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
+    
+    if st.button("🚨 KÉSEDELMES TANÁCSADÓK ÉRTESÍTÉSE (48 ÓRA)", type="primary", use_container_width=True):
+        with st.spinner("48 órás leadek keresése és e-mailek küldése..."):
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Leadek, amik >48 órásak és Kiosztva státuszúak
+            cursor.execute("""
+                SELECT l.id, l.client_name, l.assigned_advisor_id, u.name, u.username 
+                FROM leads l
+                JOIN users u ON l.assigned_advisor_id = u.id
+                WHERE l.status = 'Kiosztva' AND l.created_at <= datetime('now', '-48 hours')
+            """)
+            stale_leads = cursor.fetchall()
+            
+            if not stale_leads:
+                st.success("🎉 Szuper! Nincsenek 48 óránál régebbi, feldolgozatlan kiosztott leadek.")
+            else:
+                # Csoportosítás tanácsadók szerint, hogy mindenki csak 1 levelet kapjon a saját elmaradásairól
+                notifications = {}
+                for row in stale_leads:
+                    adv_id = row['assigned_advisor_id']
+                    if adv_id not in notifications:
+                        notifications[adv_id] = {
+                            "name": row['name'],
+                            "email": row['username'],
+                            "leads": []
+                        }
+                    notifications[adv_id]["leads"].append(row['client_name'])
+                    
+                sent_count = 0
+                for adv_id, data in notifications.items():
+                    lead_list_html = "".join([f"<li><b>{lname}</b></li>" for lname in data['leads']])
+                    subject = f"🚨 FIGYELMEZTETÉS: {len(data['leads'])} db feldolgozatlan lead (48+ óra)!"
+                    body = (
+                        f"<p>Kedves {data['name']}!</p>"
+                        f"<p>A CRM rendszerünk észlelte, hogy az alábbi ügyfelek / leadek már több mint 48 órája lettek kiosztva számodra, "
+                        f"de a státuszuk még nem lett frissítve:</p>"
+                        f"<ul>{lead_list_html}</ul>"
+                        f"<p>Kérjük, mielőbb lépj be a rendszerbe, vedd fel velük a kapcsolatot és frissítsd a státuszukat!</p>"
+                    )
+                    
+                    try:
+                        send_email_smtp(data['email'], subject, body)
+                        sent_count += 1
+                    except Exception as e:
+                        st.error(f"Hiba az e-mail küldésekor ({data['name']}): {e}")
+                        
+                st.success(f"✅ Riasztás elküldve! {sent_count} munkatárs kapott értesítést a késedelmes leadekről.")
+            conn.close()
+            time.sleep(3)
+            st.rerun()
+            
+    st.divider()
+    # ==========================================================
+    # --- NAGY PIROS GOMB RÉSZ VÉGE ---
+    # ==========================================================
+
+    # Innen folytatódik az eredeti kódod:
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -907,7 +988,8 @@ elif menu == "Lead Kiosztás & Visszavétel":
             select_all = st.checkbox("☑️ **Összes megjelenített lead kijelölése**", key="bulk_select_all")
             
             # --- 2. DataFrame felépítése a listából ---
-            df_bulk = pd.DataFrame(filtered_leads)
+            # A sqlite3.Row objektumokat dict-té kell alakítani, hogy a Pandas lássa az oszlopneveket
+            df_bulk = pd.DataFrame([dict(row) for row in filtered_leads])
             
             # Szükséges oszlopok kiválogatása és átnevezése a szép megjelenítéshez
             df_bulk = df_bulk[['id', 'client_name', 'email', 'phone', 'source', 'status', 'notes']]
