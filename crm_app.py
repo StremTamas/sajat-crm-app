@@ -1074,52 +1074,112 @@ elif menu == "Lead Kiosztás & Visszavétel":
     with tab2:
         st.subheader("📝 Leadek Egyenkénti Kezelése")
 
-        k_total_pages = max(1, math.ceil(len(filtered_leads) / kiosztas_page_size))
-        k_page = st.number_input(
-            f"Oldal (1 - {k_total_pages}):",
-            min_value=1,
-            max_value=k_total_pages,
-            value=1,
-            step=1,
-            key="k_page_num",
-        )
+        if not filtered_leads:
+            st.info("Nincs kezelhető lead a jelenlegi szűrések alapján.")
+        else:
+            k_total_pages = max(1, math.ceil(len(filtered_leads) / kiosztas_page_size))
+            k_page = st.number_input(
+                f"Oldal (1 - {k_total_pages}):",
+                min_value=1,
+                max_value=k_total_pages,
+                value=1,
+                step=1,
+                key="k_page_num",
+            )
 
-        k_start = (k_page - 1) * kiosztas_page_size
-        k_end = k_start + kiosztas_page_size
-        paged_k_leads = filtered_leads[k_start:k_end]
+            k_start = (k_page - 1) * kiosztas_page_size
+            k_end = k_start + kiosztas_page_size
+            paged_k_leads = filtered_leads[k_start:k_end]
 
-        for l in paged_k_leads:
-            col1, col2, col3 = st.columns([3, 3, 2])
-            with col1:
-                st.write(
-                    f"**{l['client_name']}** ({l['source']}) - Status: `{l['status']}`"
-                )
-                st.caption(
-                    f"E-mail: {l['email']} | Tel: {l['phone']}\n\n**Infó /"
-                    f" Megjegyzés:** {l['notes'] if l['notes'] else 'Nincs'}"
-                )
-            with col2:
-                current_assigned = l["assigned_advisor_id"]
+            # Felelősök listája a legördülő menühöz, és visszakereső szótár (Név -> ID)
+            staff_name_to_id = {v: k for k, v in staff_options.items()}
+            staff_names = list(staff_options.values())
 
-                selected_staff = st.selectbox(
-                    "Felelős hozzárendelése",
-                    options=list(staff_options.keys()),
-                    index=list(staff_options.keys()).index(current_assigned)
-                    if current_assigned in staff_options
-                    else 0,
-                    format_func=lambda x: staff_options[x],
-                    key=f"staff_{l['id']}",
-                )
-            with col3:
-                if st.button("Mentés / Kiosztás", key=f"btn_{l['id']}"):
+            # 1. Adatkeret (DataFrame) felépítése a megjelenítéshez
+            rows_for_df = []
+            for l in paged_k_leads:
+                # Lekérjük az aktuális felelős nevét, ha nincs kiosztva, akkor az alapértelmezett értéket
+                current_staff_name = staff_options.get(l["assigned_advisor_id"], staff_options[None])
+                rows_for_df.append({
+                    "id": l["id"],
+                    "Név / Cégnév": l["client_name"],
+                    "E-mail": l["email"],
+                    "Telefon": l["phone"],
+                    "Forrás": l["source"],
+                    "Státusz": l["status"],
+                    "Infó": l["notes"],
+                    "Felelős Tanácsadó": current_staff_name
+                })
+            
+            df_single = pd.DataFrame(rows_for_df)
+
+            # 2. Interaktív táblázat beépített Selectbox oszloppal
+            edited_df_single = st.data_editor(
+                df_single,
+                column_config={
+                    "id": None, # Elrejtjük az ID-t a felhasználó elől
+                    "Felelős Tanácsadó": st.column_config.SelectboxColumn(
+                        "Felelős Tanácsadó",
+                        help="Kattints duplán a felelős módosításához",
+                        options=staff_names,
+                        required=True,
+                    ),
+                },
+                disabled=["Név / Cégnév", "E-mail", "Telefon", "Forrás", "Státusz", "Infó"],
+                hide_index=True,
+                use_container_width=True,
+                key="single_data_editor"
+            )
+
+            # 3. Csoportos Módosítások mentése gomb
+            st.divider()
+            if st.button("💾 Módosítások Mentése", type="primary", use_container_width=True):
+                # Összehasonlítjuk az eredeti és a módosított táblázatot (ahol változott a felelős)
+                changed_rows = edited_df_single[edited_df_single["Felelős Tanácsadó"] != df_single["Felelős Tanácsadó"]]
+                
+                if changed_rows.empty:
+                    st.info("Nem történt módosítás a táblázatban.")
+                else:
                     conn = get_db_connection()
                     cursor = conn.cursor()
-                    new_stat = "Kiosztva" if selected_staff is not None else "Új"
-                    cursor.execute(
-                        "UPDATE leads SET assigned_advisor_id = ?, status = ? WHERE id ="
-                        " ?",
-                        (selected_staff, new_stat, l["id"]),
-                    )
+                    sent_emails = 0
+                    
+                    for _, row in changed_rows.iterrows():
+                        lead_id = row["id"]
+                        new_staff_name = row["Felelős Tanácsadó"]
+                        new_staff_id = staff_name_to_id[new_staff_name] # Visszaalakítjuk Névből ID-vé
+                        new_stat = "Kiosztva" if new_staff_id is not None else "Új"
+                        
+                        cursor.execute(
+                            "UPDATE leads SET assigned_advisor_id = ?, status = ? WHERE id = ?",
+                            (new_staff_id, new_stat, lead_id),
+                        )
+                        
+                        # E-mail értesítő, ha az új állapotban van kijelölt tanácsadó
+                        if new_staff_id is not None:
+                            cursor.execute("SELECT name, username FROM users WHERE id = ?", (new_staff_id,))
+                            t_user = cursor.fetchone()
+                            if t_user:
+                                subject = "Új lead kiosztva - Alfa CRM"
+                                body = (
+                                    f"<p>Kedves {t_user['name']}!</p>"
+                                    f"<p>Kiosztásra került részedre egy új lead a CRM rendszerben.</p>"
+                                    f"<p><b>Ügyfél neve:</b> {row['Név / Cégnév']}<br>"
+                                    f"<b>Forrás:</b> {row['Forrás']}</p>"
+                                    f"<p>Kérlek, lépj be a rendszerbe és vedd fel vele a kapcsolatot!</p>"
+                                )
+                                try:
+                                    send_email_smtp(t_user['username'], subject, body)
+                                    sent_emails += 1
+                                except:
+                                    pass # Ha hiba van a levéllel, nem áll meg a mentés folyamata
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    st.success(f"✅ {len(changed_rows)} db lead sikeresen frissítve, {sent_emails} db értesítő e-mail kiküldve!")
+                    time.sleep(2)
+                    st.rerun()
                     
                     # --- ÚJ: E-mail küldése a tanácsadónak egyedi kiosztásról ---
                     if selected_staff is not None and selected_staff != current_assigned:
