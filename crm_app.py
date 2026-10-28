@@ -287,7 +287,6 @@ def sync_google_sheets_to_crm():
                             else "Beérkezett kitöltés"
                         )
 
-                        # DUPLIKÁCIÓ SZŰRÉS (PostgreSQL kompatibilis dátumkezeléssel)
                         if src["name"] == "Ügyfél Évfordulók":
                             cursor.execute(
                                 f"SELECT id FROM leads WHERE email != '' AND email = %s AND source = %s AND notes = %s AND created_at >= NOW() - INTERVAL '{cooldown} days'",
@@ -329,14 +328,16 @@ def sync_google_sheets_to_crm():
 
         conn.commit()
         conn.close()
+        st.cache_data.clear()
         return new_leads_count
     except Exception as e:
         st.sidebar.error(f"❌ Általános hiba: {e}")
         return 0
 
 # ==========================================
-# 3. KIÉRTÉKELŐ ÉS E-MAIL KÜLDŐ SEGÉDFÜGGVÉNYEK
+# 3. KIÉRTÉKELŐ ÉS GYORSÍTÓTÁRAZOTT EGYSÉGEK
 # ==========================================
+@st.cache_data(ttl=600)
 def get_campaign_settings():
     try:
         gc = get_gspread_client()
@@ -345,6 +346,15 @@ def get_campaign_settings():
     except Exception as e:
         st.error(f"Hiba a kampány beállítások betöltésekor: {e}")
         return []
+
+@st.cache_data(ttl=120)
+def get_cached_users():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, role, is_active, manager_id FROM users WHERE is_active = 1")
+    users = cursor.fetchall()
+    conn.close()
+    return [dict(u) for u in users]
 
 def send_email_smtp(to_email, subject, html_content):
     msg = MIMEMultipart("alternative")
@@ -512,11 +522,12 @@ def process_form_evaluations():
                     conn.close()
 
                     feldolgozott_count += 1
-                    time.sleep(random.randint(10, 20))
+                    time.sleep(random.randint(5, 10))
                 except Exception as err:
                     st.error(f"Hiba a levél küldésekor ({nev}): {err}")
 
     if feldolgozott_count > 0:
+        st.cache_data.clear()
         st.balloons()
         st.success(
             f"A kiértékelés lefutott! Összesen {feldolgozott_count} új kitöltő kapott"
@@ -815,6 +826,7 @@ if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
             )
             conn.commit()
             conn.close()
+            st.cache_data.clear()
             st.success("Státusz és visszajelzés sikeresen elmentve!")
             st.rerun()
 
@@ -828,7 +840,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
         st.warning("Ehhez a menüponthoz nincs jogosultságod.")
         st.stop()
 
-    # --- NAGY PIROS GOMB (48 ÓRÁS RIASZTÁS KIKÜLDÉSE) ---
     st.markdown(
         """
         <div class="red-alert-box">
@@ -899,8 +910,6 @@ elif menu == "Lead Kiosztás & Visszavétel":
             "SELECT * FROM leads WHERE status != 'Lezárt' AND status != 'Sikeres kötés' ORDER BY id DESC"
         )
         leads = cursor.fetchall()
-        cursor.execute("SELECT id, name, role FROM users WHERE is_active = 1")
-        staff = cursor.fetchall()
     else:
         cursor.execute(
             """SELECT * FROM leads 
@@ -912,13 +921,15 @@ elif menu == "Lead Kiosztás & Visszavétel":
             (current_user["id"], current_user["id"], current_user["id"])
         )
         leads = cursor.fetchall()
-        cursor.execute(
-            "SELECT id, name, role FROM users WHERE is_active = 1 AND (id = %s OR manager_id = %s)", 
-            (current_user["id"], current_user["id"])
-        )
-        staff = cursor.fetchall()
         
     conn.close()
+
+    # Memóriából olvasott munkatárs lista a felgyorsításhoz
+    all_cached_users = get_cached_users()
+    if current_user["role"] in ["Igazgató", "Asszisztens"]:
+        staff = all_cached_users
+    else:
+        staff = [u for u in all_cached_users if u["id"] == current_user["id"] or u["manager_id"] == current_user["id"]]
 
     staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
     staff_options[None] = "-- Nincs kiosztva / Visszavéve --"
@@ -1035,11 +1046,12 @@ elif menu == "Lead Kiosztás & Visszavétel":
 
                     conn.commit()
                     conn.close()
+                    st.cache_data.clear()
 
                     st.success(
                         f"Sikeresen kiosztva {len(selected_lead_ids)} db lead, és az értesítő e-mail kiküldve!"
                     )
-                    time.sleep(2)
+                    time.sleep(1)
                     st.rerun()
 
     with tab2:
@@ -1140,9 +1152,10 @@ elif menu == "Lead Kiosztás & Visszavétel":
                     
                     conn.commit()
                     conn.close()
+                    st.cache_data.clear()
                     
                     st.success(f"✅ {len(changed_rows)} db lead sikeresen frissítve, {sent_emails} db értesítő e-mail kiküldve!")
-                    time.sleep(2)
+                    time.sleep(1)
                     st.rerun()
 
 elif menu == "🚀 Kampány E-mailek Kiküldése":
@@ -1248,12 +1261,12 @@ elif menu == "🚀 Kampány E-mailek Kiküldése":
                             try:
                                 send_email_smtp(email_to, current_setting.get('E-mail Tárgya', ''), html_content)
                                 sent_count += 1
-                                time.sleep(random.uniform(1.0, 2.5))
+                                time.sleep(random.uniform(1.0, 2.0))
                             except Exception as e:
                                 st.error(f"Hiba a levél küldésekor ({email_to}): {e}")
                         
                         st.balloons()
-                        st.success(f"Gartulálok! {sent_count} db személyre szabott, HTML formátumú e-mail sikeresen kiküldve!")
+                        st.success(f"Gratulálok! {sent_count} db személyre szabott, HTML formátumú e-mail sikeresen kiküldve!")
 
 elif menu == "🗑️ Nyers Leadek Törlése":
     st.title("🗑️ Nyers/Hibás Leadek Szelektív Törlése")
@@ -1286,6 +1299,7 @@ elif menu == "🗑️ Nyers Leadek Törlése":
                 placeholders = ",".join(["%s"] * len(selected_ids_to_delete))
                 cursor.execute(f"DELETE FROM leads WHERE id IN ({placeholders})", selected_ids_to_delete)
                 conn.commit()
+                st.cache_data.clear()
                 st.success(f"{len(selected_ids_to_delete)} db lead sikeresen törölve!")
                 time.sleep(1)
                 st.rerun()
@@ -1352,6 +1366,7 @@ elif menu == "Új Lead Feltöltés":
             )
             conn.commit()
             conn.close()
+            st.cache_data.clear()
             st.success(f"Új lead sikeresen rögzítve! (Forrás: {final_source})")
 
 elif menu == "📥 Toborzási Form Kiértékelés":
@@ -1395,16 +1410,8 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
 
     st.subheader("✏️ Munkatárs Adatainak Módosítása & Jelszó Beállítása")
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM users ORDER BY id ASC")
-    all_users = cursor.fetchall()
-
-    cursor.execute(
-        "SELECT id, name, role FROM users WHERE role IN ('Igazgató', 'Manager')"
-    )
-    managers = cursor.fetchall()
-    conn.close()
+    all_users = get_cached_users()
+    managers = [u for u in all_users if u["role"] in ["Igazgató", "Manager"]]
 
     manager_opts = {m["id"]: f"{m['name']} ({m['role']})" for m in managers}
     manager_opts[None] = "Nincs (Főigazgató alá tartozik)"
@@ -1443,7 +1450,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
                     else 1,
                 )
 
-                current_mgr = selected_user["manager_id"]
+                current_mgr = selected_user.get("manager_id")
                 edit_manager = st.selectbox(
                     "Felettes Manager / Igazgató:",
                     options=list(manager_opts.keys()),
@@ -1503,6 +1510,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
 
                         conn.commit()
                         conn.close()
+                        st.cache_data.clear()
                         st.success(f"Munkatárs adatai sikeresen frissítve: {edit_name}")
                         st.rerun()
                     except Exception as e:
@@ -1546,6 +1554,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
                     )
                     conn.commit()
                     conn.close()
+                    st.cache_data.clear()
                     st.success(f"Munkatárs sikeresen hozzáadva: {new_name}")
                     st.rerun()
                 except Exception as e:
@@ -1581,4 +1590,5 @@ elif menu == "🔐 Saját Profil & Jelszócsere":
                 conn.commit()
                 conn.close()
                 st.session_state["user"]["password"] = new_pw.strip()
+                st.cache_data.clear()
                 st.success("Jelszavadat sikeresen megváltoztattad!")
