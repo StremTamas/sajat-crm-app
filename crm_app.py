@@ -2,7 +2,6 @@ import datetime
 import math
 import random
 import smtplib
-import sqlite3
 import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -10,6 +9,8 @@ from email.mime.text import MIMEText
 from google.oauth2.service_account import Credentials
 import gspread
 import pandas as pd
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import streamlit as st
 
 # ==========================================
@@ -54,12 +55,18 @@ st.markdown(
         margin-bottom: 20px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     }
+    .red-alert-box {
+        background-color: #ffe5e5;
+        border-left: 5px solid #ff4b4b;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        color: #900000;
+    }
     </style>
 """,
     unsafe_allow_html=True,
 )
-
-DB_FILE = "crm_data_v2.db"
 
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
@@ -67,7 +74,7 @@ SENDER_EMAIL = "arrabonainsurance@gmail.com"
 SENDER_NAME = "Insurance Arrabona"
 SENDER_PASSWORD = "aqzs okrl jewl ypdw"
 
-# --- E-MAIL KÉPEK LINKEI (TARTALÉK AZ AUTOMATA TOBORZÁSHOZ) ---
+# --- E-MAIL KÉPEK LINKEI ---
 LOGO_URL = "https://lh3.googleusercontent.com/d/IDE_JON_A_LOGO_ID"
 PORTRAIT_URL = "https://lh3.googleusercontent.com/d/IDE_JON_AZ_ARCKEP_ID"
 
@@ -84,9 +91,9 @@ POSSIBLE_FORM_SHEETS = [
     "Válaszok",
 ]
 
+# --- ADATBÁZIS CSATLAKOZÁS (POSTGRESQL / SUPABASE) ---
 def get_db_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(st.secrets["DATABASE_URL"], cursor_factory=RealDictCursor)
     return conn
 
 def init_db():
@@ -94,33 +101,34 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            name TEXT NOT NULL,
-            role TEXT NOT NULL,
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(255) UNIQUE NOT NULL,
+            password VARCHAR(255) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            role VARCHAR(100) NOT NULL,
             manager_id INTEGER,
             is_active INTEGER DEFAULT 1
         )
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS leads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_name TEXT NOT NULL,
-            phone TEXT,
-            email TEXT,
+            id SERIAL PRIMARY KEY,
+            client_name VARCHAR(255) NOT NULL,
+            phone VARCHAR(100),
+            email VARCHAR(255),
             address TEXT,
-            contact_person TEXT,
-            source TEXT,
-            status TEXT DEFAULT 'Új',
+            contact_person VARCHAR(255),
+            source VARCHAR(255),
+            status VARCHAR(100) DEFAULT 'Új',
             assigned_manager_id INTEGER,
             assigned_advisor_id INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             notes TEXT
         )
     """)
-    cursor.execute("SELECT COUNT(*) FROM users WHERE username = 'admin'")
-    if cursor.fetchone()[0] == 0:
+    cursor.execute("SELECT COUNT(*) AS cnt FROM users WHERE username = %s", ('admin',))
+    res = cursor.fetchone()
+    if res['cnt'] == 0:
         cursor.execute("""
             INSERT INTO users (username, password, name, role, is_active)
             VALUES ('admin', 'admin123', 'Strem Tamás', 'Igazgató', 1)
@@ -185,7 +193,7 @@ def sync_google_sheets_to_crm():
         for src in SHEET_SOURCES:
             try:
                 spreadsheet = client.open_by_key(src["id"])
-                cooldown = src.get("cooldown_days", 30)
+                cooldown = int(src.get("cooldown_days", 30))
                 
                 for sheet in spreadsheet.worksheets():
                     all_rows = sheet.get_all_values()
@@ -195,7 +203,6 @@ def sync_google_sheets_to_crm():
 
                     headers = [str(h).strip().lower() for h in all_rows[0]]
                     
-                    # ÚJ: Megkeressük a 'feldolgozva' oszlop indexét (A gspread 1-től indexel, ezért +1)
                     feldolgozva_col_idx = None
                     for idx, h in enumerate(headers):
                         if "feldolgozva" in h or "status" in h:
@@ -243,11 +250,9 @@ def sync_google_sheets_to_crm():
                         if feldolgozva in ["OK", "IGEN", "FELDOLGOZVA", "LEZÁRT"]:
                             continue
 
-                        # Megerősített vizsgálat: ha semmi sincs, ugrunk
                         if not email and not nev and not phone:
                             continue
 
-                        # Ha nincs név, de van e-mail vagy telefon, pótoljuk
                         if not nev and email:
                             nev = email.split("@")[0].capitalize()
                         elif not nev and phone:
@@ -275,20 +280,20 @@ def sync_google_sheets_to_crm():
                             else "Beérkezett kitöltés"
                         )
 
-                        # DUPLIKÁCIÓ SZŰRÉS 
+                        # DUPLIKÁCIÓ SZŰRÉS (PostgreSQL kompatibilis dátumkezeléssel)
                         if src["name"] == "Ügyfél Évfordulók":
                             cursor.execute(
-                                f"SELECT id FROM leads WHERE email != '' AND email = ? AND source = ? AND notes = ? AND created_at >= datetime('now', '-{cooldown} days')",
+                                f"SELECT id FROM leads WHERE email != '' AND email = %s AND source = %s AND notes = %s AND created_at >= NOW() - INTERVAL '{cooldown} days'",
                                 (email, src["name"], auto_notes),
                             )
                         else:
                             cursor.execute(
                                 f"""SELECT id FROM leads 
-                                   WHERE ((email != '' AND email = ?) 
-                                          OR (client_name != '' AND client_name = ?)
-                                          OR (phone != '' AND phone = ?))
-                                     AND source = ? 
-                                     AND created_at >= datetime('now', '-{cooldown} days')""",
+                                   WHERE ((email != '' AND email = %s) 
+                                          OR (client_name != '' AND client_name = %s)
+                                          OR (phone != '' AND phone = %s))
+                                     AND source = %s 
+                                     AND created_at >= NOW() - INTERVAL '{cooldown} days'""",
                                 (email, nev, phone, src["name"]),
                             )
                             
@@ -298,17 +303,15 @@ def sync_google_sheets_to_crm():
                             cursor.execute(
                                 """
                                 INSERT INTO leads (client_name, phone, email, address, contact_person, source, status, notes)
-                                VALUES (?, ?, ?, '', ?, ?, 'Új', ?)
+                                VALUES (%s, %s, %s, '', %s, %s, 'Új', %s)
                                 """,
                                 (nev, phone, email, nev, src["name"], auto_notes),
                             )
                             new_leads_count += 1
                             
-                            # ÚJ RÉSZ: Beírjuk a Google Sheetbe, hogy feldolgozva
                             if feldolgozva_col_idx:
                                 try:
                                     sheet.update_cell(i, feldolgozva_col_idx, "OK")
-                                    # Egy minimális szünet, hogy a Google API ne tiltson le a túl gyors kérések miatt
                                     time.sleep(1)
                                 except Exception as err:
                                     st.sidebar.warning(f"Nem sikerült beírni az OK-t a Sheetbe a(z) {nev} ügyfélnél: {err}")
@@ -328,7 +331,6 @@ def sync_google_sheets_to_crm():
 # 3. KIÉRTÉKELŐ ÉS E-MAIL KÜLDŐ SEGÉDFÜGGVÉNYEK
 # ==========================================
 def get_campaign_settings():
-    """A Google Sheet 'CRM_Beallitasok' fülének beolvasása"""
     try:
         gc = get_gspread_client()
         sheet = gc.open_by_key(CRM_BEALLITASOK_SHEET_ID).worksheet("CRM_Beallitasok")
@@ -497,7 +499,7 @@ def process_form_evaluations():
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute(
-                        "UPDATE leads SET status = ? WHERE email = ?", (uj_statusz, email)
+                        "UPDATE leads SET status = %s WHERE email = %s", (uj_statusz, email)
                     )
                     conn.commit()
                     conn.close()
@@ -536,7 +538,7 @@ if not st.session_state["user"]:
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT * FROM users WHERE username = ? AND password = ? AND is_active = 1",
+                    "SELECT * FROM users WHERE username = %s AND password = %s AND is_active = 1",
                     (username.strip(), password.strip()),
                 )
                 user = cursor.fetchone()
@@ -575,7 +577,6 @@ if st.sidebar.button("🚪 Kijelentkezés"):
     st.session_state["user"] = None
     st.rerun()
 
-# Dinamikus menü felépítése a jogosultságok alapján
 menu_options = [
     "Saját Leadek / Dashboard",
     "🗄️ Archívum (Lezárt leadek)",
@@ -602,8 +603,8 @@ if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
     
     if not is_archive:
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM leads WHERE status = 'Új'")
-        unassigned_new_count = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) AS cnt FROM leads WHERE status = 'Új'")
+        unassigned_new_count = cursor.fetchone()['cnt']
         if unassigned_new_count > 0:
             st.markdown(
                 f'<div class="new-lead-card">🎉 ÚJ LEAD GENERÁLÓDOTT! Jelenleg'
@@ -626,16 +627,15 @@ if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
         """
         params = ()
     elif current_user["role"] == "Manager":
-        # JAVÍTOTT Menedzser Dashboard Query
         query = """
             SELECT l.id, l.client_name, l.phone, l.email, l.address, l.contact_person, 
                    l.source, l.status, l.created_at, l.notes,
                    COALESCE(u.name, 'Nincs kiosztva') AS advisor_name
             FROM leads l
             LEFT JOIN users u ON l.assigned_advisor_id = u.id
-            WHERE l.assigned_advisor_id = ? 
-               OR l.assigned_manager_id = ? 
-               OR l.assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = ?)
+            WHERE l.assigned_advisor_id = %s 
+               OR l.assigned_manager_id = %s 
+               OR l.assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = %s)
             ORDER BY l.id DESC
         """
         params = (current_user["id"], current_user["id"], current_user["id"])
@@ -646,7 +646,7 @@ if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
                    COALESCE(u.name, 'Nincs kiosztva') AS advisor_name
             FROM leads l
             LEFT JOIN users u ON l.assigned_advisor_id = u.id
-            WHERE l.assigned_advisor_id = ? 
+            WHERE l.assigned_advisor_id = %s 
             ORDER BY l.id DESC
         """
         params = (current_user["id"],)
@@ -803,7 +803,7 @@ if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE leads SET status = ?, notes = ? WHERE id = ?",
+                "UPDATE leads SET status = %s, notes = %s WHERE id = %s",
                 (new_status, new_note, selected_lead_id),
             )
             conn.commit()
@@ -821,21 +821,9 @@ elif menu == "Lead Kiosztás & Visszavétel":
         st.warning("Ehhez a menüponthoz nincs jogosultságod.")
         st.stop()
 
-    # ==========================================================
-    # --- ÚJ: NAGY PIROS GOMB (48 ÓRÁS RIASZTÁS KIKÜLDÉSE) ---
-    # ==========================================================
+    # --- NAGY PIROS GOMB (48 ÓRÁS RIASZTÁS KIKÜLDÉSE) ---
     st.markdown(
         """
-        <style>
-        .red-alert-box {
-            background-color: #ffe5e5;
-            border-left: 5px solid #ff4b4b;
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 10px;
-            color: #900000;
-        }
-        </style>
         <div class="red-alert-box">
             <strong>🚨 48 Órás Elakadt Leadek Riasztása</strong><br>
             Ez a gomb megkeresi azokat a leadeket, amelyeket több mint 48 órája osztottak ki, de még mindig "Kiosztva" státuszban vannak. Automatikus figyelmeztető e-mailt küld az érintett felelős tanácsadóknak az elmaradt hívásokról.
@@ -849,19 +837,17 @@ elif menu == "Lead Kiosztás & Visszavétel":
             conn = get_db_connection()
             cursor = conn.cursor()
             
-            # Leadek, amik >48 órásak és Kiosztva státuszúak
             cursor.execute("""
                 SELECT l.id, l.client_name, l.assigned_advisor_id, u.name, u.username 
                 FROM leads l
                 JOIN users u ON l.assigned_advisor_id = u.id
-                WHERE l.status = 'Kiosztva' AND l.created_at <= datetime('now', '-48 hours')
+                WHERE l.status = 'Kiosztva' AND l.created_at <= NOW() - INTERVAL '48 hours'
             """)
             stale_leads = cursor.fetchall()
             
             if not stale_leads:
                 st.success("🎉 Szuper! Nincsenek 48 óránál régebbi, feldolgozatlan kiosztott leadek.")
             else:
-                # Csoportosítás tanácsadók szerint, hogy mindenki csak 1 levelet kapjon a saját elmaradásairól
                 notifications = {}
                 for row in stale_leads:
                     adv_id = row['assigned_advisor_id']
@@ -897,40 +883,30 @@ elif menu == "Lead Kiosztás & Visszavétel":
             st.rerun()
             
     st.divider()
-    # ==========================================================
-    # --- NAGY PIROS GOMB RÉSZ VÉGE ---
-    # ==========================================================
 
-    # Innen folytatódik az eredeti kódod:
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # --- JAVÍTÁS: Szerepkör alapú hierarchia a kiosztó nézetben is ---
     if current_user["role"] in ["Igazgató", "Asszisztens"]:
         cursor.execute(
             "SELECT * FROM leads WHERE status != 'Lezárt' AND status != 'Sikeres kötés' ORDER BY id DESC"
         )
         leads = cursor.fetchall()
-        
-        # Igazgató / Asszisztens minden aktív kollégának oszthat leadeket
         cursor.execute("SELECT id, name, role FROM users WHERE is_active = 1")
         staff = cursor.fetchall()
     else:
-        # Menedzser csak a saját és beosztottjai leadjeit látja
         cursor.execute(
             """SELECT * FROM leads 
                WHERE status != 'Lezárt' AND status != 'Sikeres kötés' 
-                 AND (assigned_advisor_id = ? 
-                      OR assigned_manager_id = ? 
-                      OR assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = ?))
+                 AND (assigned_advisor_id = %s 
+                      OR assigned_manager_id = %s 
+                      OR assigned_advisor_id IN (SELECT id FROM users WHERE manager_id = %s))
                ORDER BY id DESC""",
             (current_user["id"], current_user["id"], current_user["id"])
         )
         leads = cursor.fetchall()
-
-        # Menedzser csak magának vagy a saját csapatának oszthat tovább
         cursor.execute(
-            "SELECT id, name, role FROM users WHERE is_active = 1 AND (id = ? OR manager_id = ?)", 
+            "SELECT id, name, role FROM users WHERE is_active = 1 AND (id = %s OR manager_id = %s)", 
             (current_user["id"], current_user["id"])
         )
         staff = cursor.fetchall()
@@ -984,14 +960,9 @@ elif menu == "Lead Kiosztás & Visszavétel":
                 f"Jelöld ki a csoportosan kiosztandó leadeket (Összesen: {len(filtered_leads)} db):"
             )
             
-            # --- 1. Összes kijelölése gomb a táblázat felett ---
             select_all = st.checkbox("☑️ **Összes megjelenített lead kijelölése**", key="bulk_select_all")
             
-            # --- 2. DataFrame felépítése a listából ---
-            # A sqlite3.Row objektumokat dict-té kell alakítani, hogy a Pandas lássa az oszlopneveket
             df_bulk = pd.DataFrame([dict(row) for row in filtered_leads])
-            
-            # Szükséges oszlopok kiválogatása és átnevezése a szép megjelenítéshez
             df_bulk = df_bulk[['id', 'client_name', 'email', 'phone', 'source', 'status', 'notes']]
             df_bulk = df_bulk.rename(columns={
                 'client_name': 'Név / Cégnév',
@@ -1002,11 +973,8 @@ elif menu == "Lead Kiosztás & Visszavétel":
                 'notes': 'Infó'
             })
             
-            # Kijelölő logikai oszlop hozzáadása az elejére, a 'select_all' állapotával
             df_bulk.insert(0, "Kijelölve", select_all)
             
-            # --- 3. Interaktív táblázat megjelenítése ---
-            # Az 'id' oszlopot elrejtjük a felhasználók elől, de a háttérben megmarad az azonosításhoz
             edited_df = st.data_editor(
                 df_bulk,
                 column_config={
@@ -1017,40 +985,36 @@ elif menu == "Lead Kiosztás & Visszavétel":
                     ),
                     "id": None, 
                 },
-                # A többi oszlopot írásvédetté tesszük, hogy véletlenül ne írják át
                 disabled=["Név / Cégnév", "E-mail", "Telefon", "Forrás", "Státusz", "Infó"],
                 hide_index=True,
                 use_container_width=True,
                 key="bulk_data_editor"
             )
             
-            # --- 4. Kijelölt ID-k valós idejű kinyerése a táblázatból ---
             selected_lead_ids = edited_df[edited_df["Kijelölve"] == True]["id"].tolist()
 
         with b_col2:
-            st.write("") # Kicsi térköz az igazításhoz
+            st.write("")
             st.write("")
             
-            # A gomb felirata azonnal követi a szerkesztett táblázat adatait
             if st.button(
                 f"🚀 Kijelölt {len(selected_lead_ids)} db lead kiosztása",
                 type="primary",
-                disabled=len(selected_lead_ids) == 0 # Nem lehet kattintani, ha 0 darab van kijelölve
+                disabled=len(selected_lead_ids) == 0
             ):
                 if selected_lead_ids:
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     new_stat = "Kiosztva" if bulk_target_staff is not None else "Új"
 
-                    placeholders = ",".join(["?"] * len(selected_lead_ids))
-                    query = f"UPDATE leads SET assigned_advisor_id = ?, status = ? WHERE id IN ({placeholders})"
+                    placeholders = ",".join(["%s"] * len(selected_lead_ids))
+                    query = f"UPDATE leads SET assigned_advisor_id = %s, status = %s WHERE id IN ({placeholders})"
                     params = [bulk_target_staff, new_stat] + selected_lead_ids
 
                     cursor.execute(query, params)
                     
-                    # E-mail küldése a tanácsadónak a csoportos kiosztásról
                     if bulk_target_staff is not None:
-                        cursor.execute("SELECT name, username FROM users WHERE id = ?", (bulk_target_staff,))
+                        cursor.execute("SELECT name, username FROM users WHERE id = %s", (bulk_target_staff,))
                         t_user = cursor.fetchone()
                         if t_user:
                             t_nev = t_user["name"]
@@ -1091,14 +1055,11 @@ elif menu == "Lead Kiosztás & Visszavétel":
             k_end = k_start + kiosztas_page_size
             paged_k_leads = filtered_leads[k_start:k_end]
 
-            # Felelősök listája a legördülő menühöz, és visszakereső szótár (Név -> ID)
             staff_name_to_id = {v: k for k, v in staff_options.items()}
             staff_names = list(staff_options.values())
 
-            # 1. Adatkeret (DataFrame) felépítése a megjelenítéshez
             rows_for_df = []
             for l in paged_k_leads:
-                # Lekérjük az aktuális felelős nevét, ha nincs kiosztva, akkor az alapértelmezett értéket
                 current_staff_name = staff_options.get(l["assigned_advisor_id"], staff_options[None])
                 rows_for_df.append({
                     "id": l["id"],
@@ -1113,11 +1074,10 @@ elif menu == "Lead Kiosztás & Visszavétel":
             
             df_single = pd.DataFrame(rows_for_df)
 
-            # 2. Interaktív táblázat beépített Selectbox oszloppal
             edited_df_single = st.data_editor(
                 df_single,
                 column_config={
-                    "id": None, # Elrejtjük az ID-t a felhasználó elől
+                    "id": None,
                     "Felelős Tanácsadó": st.column_config.SelectboxColumn(
                         "Felelős Tanácsadó",
                         help="Kattints duplán a felelős módosításához",
@@ -1131,10 +1091,8 @@ elif menu == "Lead Kiosztás & Visszavétel":
                 key="single_data_editor"
             )
 
-            # 3. Csoportos Módosítások mentése gomb
             st.divider()
             if st.button("💾 Módosítások Mentése", type="primary", use_container_width=True):
-                # Összehasonlítjuk az eredeti és a módosított táblázatot (ahol változott a felelős)
                 changed_rows = edited_df_single[edited_df_single["Felelős Tanácsadó"] != df_single["Felelős Tanácsadó"]]
                 
                 if changed_rows.empty:
@@ -1147,17 +1105,16 @@ elif menu == "Lead Kiosztás & Visszavétel":
                     for _, row in changed_rows.iterrows():
                         lead_id = row["id"]
                         new_staff_name = row["Felelős Tanácsadó"]
-                        new_staff_id = staff_name_to_id[new_staff_name] # Visszaalakítjuk Névből ID-vé
+                        new_staff_id = staff_name_to_id[new_staff_name]
                         new_stat = "Kiosztva" if new_staff_id is not None else "Új"
                         
                         cursor.execute(
-                            "UPDATE leads SET assigned_advisor_id = ?, status = ? WHERE id = ?",
+                            "UPDATE leads SET assigned_advisor_id = %s, status = %s WHERE id = %s",
                             (new_staff_id, new_stat, lead_id),
                         )
                         
-                        # E-mail értesítő, ha az új állapotban van kijelölt tanácsadó
                         if new_staff_id is not None:
-                            cursor.execute("SELECT name, username FROM users WHERE id = ?", (new_staff_id,))
+                            cursor.execute("SELECT name, username FROM users WHERE id = %s", (new_staff_id,))
                             t_user = cursor.fetchone()
                             if t_user:
                                 subject = "Új lead kiosztva - Alfa CRM"
@@ -1172,7 +1129,7 @@ elif menu == "Lead Kiosztás & Visszavétel":
                                     send_email_smtp(t_user['username'], subject, body)
                                     sent_emails += 1
                                 except:
-                                    pass # Ha hiba van a levéllel, nem áll meg a mentés folyamata
+                                    pass
                     
                     conn.commit()
                     conn.close()
@@ -1180,28 +1137,7 @@ elif menu == "Lead Kiosztás & Visszavétel":
                     st.success(f"✅ {len(changed_rows)} db lead sikeresen frissítve, {sent_emails} db értesítő e-mail kiküldve!")
                     time.sleep(2)
                     st.rerun()
-                    
-                    # --- ÚJ: E-mail küldése a tanácsadónak egyedi kiosztásról ---
-                    if selected_staff is not None and selected_staff != current_assigned:
-                        cursor.execute("SELECT name, username FROM users WHERE id = ?", (selected_staff,))
-                        t_user = cursor.fetchone()
-                        if t_user:
-                            t_nev = t_user["name"]
-                            t_email = t_user["username"]
-                            subject = "Új lead kiosztva - Alfa CRM"
-                            body = f"<p>Kedves {t_nev}!</p><p>Kiosztásra került részedre egy új lead a CRM rendszerben.</p><p><b>Ügyfél neve:</b> {l['client_name']}<br><b>Forrás:</b> {l['source']}</p><p>Kérlek, lépj be a rendszerbe és vedd fel vele a kapcsolatot!</p>"
-                            try:
-                                send_email_smtp(t_email, subject, body)
-                            except:
-                                pass
 
-                    conn.commit()
-                    conn.close()
-                    st.success("Lead sikeresen frissítve, értesítés elküldve!")
-                    time.sleep(1)
-                    st.rerun()
-
-# --- ÚJ MODUL: KAMPÁNY E-MAILEK KIKÜLDÉSE ---
 elif menu == "🚀 Kampány E-mailek Kiküldése":
     st.title("🚀 Kampány E-mailek Dinamikus Kiküldése")
     st.write("Válaszd ki a kampányt, írd meg az üzenetet, és küldd ki a Google Sheetben beállított arculattal és képekkel!")
@@ -1253,7 +1189,6 @@ elif menu == "🚀 Kampány E-mailek Kiküldése":
             
             lead_opts = {l["id"]: f"[{l['source']}] {l['client_name']} ({l['email']})" for l in all_leads}
             
-            # Alapból kiválasztjuk azokat a leadeket, akiknek a forrása pont ez a kampány
             default_leads = [l["id"] for l in all_leads if l['source'] == selected_campaign]
             
             selected_lead_ids = st.multiselect(
@@ -1306,7 +1241,7 @@ elif menu == "🚀 Kampány E-mailek Kiküldése":
                             try:
                                 send_email_smtp(email_to, current_setting.get('E-mail Tárgya', ''), html_content)
                                 sent_count += 1
-                                time.sleep(random.uniform(1.0, 2.5)) # Rövid anti-spam szünet a levelek között
+                                time.sleep(random.uniform(1.0, 2.5))
                             except Exception as e:
                                 st.error(f"Hiba a levél küldésekor ({email_to}): {e}")
                         
@@ -1341,7 +1276,7 @@ elif menu == "🗑️ Nyers Leadek Törlése":
         if st.button("🗑️ Kijelölt leadek végleges törlése", type="primary"):
             if selected_ids_to_delete:
                 cursor = conn.cursor()
-                placeholders = ",".join("?" * len(selected_ids_to_delete))
+                placeholders = ",".join(["%s"] * len(selected_ids_to_delete))
                 cursor.execute(f"DELETE FROM leads WHERE id IN ({placeholders})", selected_ids_to_delete)
                 conn.commit()
                 st.success(f"{len(selected_ids_to_delete)} db lead sikeresen törölve!")
@@ -1350,7 +1285,6 @@ elif menu == "🗑️ Nyers Leadek Törlése":
             else:
                 st.warning("Nem jelöltél ki egyetlen leadet sem a törléshez!")
     conn.close()
-
 
 elif menu == "Új Lead Feltöltés":
     st.title("➕ Új Lead Manuális Hozzáadása")
@@ -1398,7 +1332,7 @@ elif menu == "Új Lead Feltöltés":
             cursor.execute(
                 """
                 INSERT INTO leads (client_name, phone, email, address, source, status, notes)
-                VALUES (?, ?, ?, ?, ?, 'Új', ?)
+                VALUES (%s, %s, %s, %s, %s, 'Új', %s)
                 """,
                 (
                     client_name,
@@ -1530,8 +1464,8 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
                             cursor.execute(
                                 """
                                 UPDATE users 
-                                SET name = ?, username = ?, password = ?, role = ?, manager_id = ?, is_active = ?
-                                WHERE id = ?
+                                SET name = %s, username = %s, password = %s, role = %s, manager_id = %s, is_active = %s
+                                WHERE id = %s
                                 """,
                                 (
                                     edit_name.strip(),
@@ -1547,8 +1481,8 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
                             cursor.execute(
                                 """
                                 UPDATE users 
-                                SET name = ?, username = ?, role = ?, manager_id = ?, is_active = ?
-                                WHERE id = ?
+                                SET name = %s, username = %s, role = %s, manager_id = %s, is_active = %s
+                                WHERE id = %s
                                 """,
                                 (
                                     edit_name.strip(),
@@ -1593,7 +1527,7 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
                     cursor.execute(
                         """
                         INSERT INTO users (username, password, name, role, manager_id, is_active)
-                        VALUES (?, ?, ?, ?, ?, 1)
+                        VALUES (%s, %s, %s, %s, %s, 1)
                         """,
                         (
                             new_username.strip(),
@@ -1634,7 +1568,7 @@ elif menu == "🔐 Saját Profil & Jelszócsere":
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute(
-                    "UPDATE users SET password = ? WHERE id = ?",
+                    "UPDATE users SET password = %s WHERE id = %s",
                     (new_pw.strip(), current_user["id"]),
                 )
                 conn.commit()
