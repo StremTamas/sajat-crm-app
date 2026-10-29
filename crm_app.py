@@ -351,7 +351,8 @@ def get_campaign_settings():
 def get_cached_users():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, name, role, is_active, manager_id FROM users WHERE is_active = 1")
+    # JAVÍTVA: username mező hozzáadva a SELECT-hez
+    cursor.execute("SELECT id, username, name, role, is_active, manager_id FROM users ORDER BY id ASC")
     users = cursor.fetchall()
     conn.close()
     return [dict(u) for u in users]
@@ -927,11 +928,11 @@ elif menu == "Lead Kiosztás & Visszavétel":
     # Memóriából olvasott munkatárs lista a felgyorsításhoz
     all_cached_users = get_cached_users()
     if current_user["role"] in ["Igazgató", "Asszisztens"]:
-        staff = all_cached_users
+        staff = [u for u in all_cached_users if u.get("is_active") == 1]
     else:
-        staff = [u for u in all_cached_users if u["id"] == current_user["id"] or u["manager_id"] == current_user["id"]]
+        staff = [u for u in all_cached_users if (u["id"] == current_user["id"] or u.get("manager_id") == current_user["id"]) and u.get("is_active") == 1]
 
-    staff_options = {s["id"]: f"{s['name']} ({s['role']})" for s in staff}
+    staff_options = {s["id"]: f"{s.get('name', 'Névtelen')} ({s.get('role', '')})" for s in staff}
     staff_options[None] = "-- Nincs kiosztva / Visszavéve --"
 
     all_sources = ["Összes forrás"] + sorted(
@@ -1411,14 +1412,14 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
     st.subheader("✏️ Munkatárs Adatainak Módosítása & Jelszó Beállítása")
 
     all_users = get_cached_users()
-    managers = [u for u in all_users if u["role"] in ["Igazgató", "Manager"]]
+    managers = [u for u in all_users if u.get("role") in ["Igazgató", "Manager"] and u.get("is_active") == 1]
 
-    manager_opts = {m["id"]: f"{m['name']} ({m['role']})" for m in managers}
+    manager_opts = {m["id"]: f"{m.get('name', 'Névtelen')} ({m.get('role', '')})" for m in managers}
     manager_opts[None] = "Nincs (Főigazgató alá tartozik)"
 
     user_opts = {
-    u.get("id"): f"{u.get('name', 'Névtelen')} ({u.get('username', 'n/a')}) - {u.get('role', 'Nincs szerepkör')}"
-    for u in all_users if u and u.get("id")
+        u.get("id"): f"{u.get('name', 'Névtelen')} ({u.get('username', 'Nincs email')}) - {u.get('role', 'Nincs szerepkör')}"
+        for u in all_users if u and u.get("id")
     }
 
     if user_opts:
@@ -1427,14 +1428,14 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
         )
 
         selected_user = next(
-            (u for u in all_users if u["id"] == selected_edit_id), None
+            (u for u in all_users if u.get("id") == selected_edit_id), None
         )
 
         if selected_user:
             with st.form("edit_user_form"):
-                edit_name = st.text_input("Teljes Név", value=selected_user["name"])
+                edit_name = st.text_input("Teljes Név", value=selected_user.get("name", ""))
                 edit_username = st.text_input(
-                    "Felhasználónév (E-mail cím)", value=selected_user["username"]
+                    "Felhasználónév (E-mail cím)", value=selected_user.get("username", "")
                 )
 
                 edit_new_pw = st.text_input(
@@ -1443,27 +1444,29 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
                 )
 
                 roles = ["Manager", "Tanácsadó", "Asszisztens", "Igazgató"]
+                current_role = selected_user.get("role", "Tanácsadó")
+                role_idx = roles.index(current_role) if current_role in roles else 1
+
                 edit_role = st.selectbox(
                     "Szerepkör",
                     options=roles,
-                    index=roles.index(selected_user["role"])
-                    if selected_user["role"] in roles
-                    else 1,
+                    index=role_idx,
                 )
 
                 current_mgr = selected_user.get("manager_id")
+                mgr_options = list(manager_opts.keys())
+                mgr_idx = mgr_options.index(current_mgr) if current_mgr in mgr_options else mgr_options.index(None)
+
                 edit_manager = st.selectbox(
                     "Felettes Manager / Igazgató:",
-                    options=list(manager_opts.keys()),
-                    index=list(manager_opts.keys()).index(current_mgr)
-                    if current_mgr in manager_opts
-                    else list(manager_opts.keys()).index(None),
+                    options=mgr_options,
+                    index=mgr_idx,
                     format_func=lambda x: manager_opts[x],
                 )
 
                 edit_active = st.checkbox(
                     "Aktív felhasználó (Beléphet a rendszerbe)",
-                    value=bool(selected_user["is_active"]),
+                    value=bool(selected_user.get("is_active", 1)),
                 )
 
                 submit_edit = st.form_submit_button(
