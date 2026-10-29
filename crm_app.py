@@ -1417,7 +1417,8 @@ elif menu == "Felhasználók Kezelése (Jogosultságok)":
     manager_opts[None] = "Nincs (Főigazgató alá tartozik)"
 
     user_opts = {
-        u["id"]: f"{u['name']} ({u['username']}) - {u['role']}" for u in all_users
+    u.get("id"): f"{u.get('name', 'Névtelen')} ({u.get('username', 'n/a')}) - {u.get('role', 'Nincs szerepkör')}"
+    for u in all_users if u and u.get("id")
     }
 
     if user_opts:
