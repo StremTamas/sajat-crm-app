@@ -168,9 +168,11 @@ def init_db():
             notes TEXT
         )
     """)
-    cursor.execute(
-        "ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP;"
-    )
+    
+    # EZZEL A KIKOMMENTELÉSSEL MEGSZŰNIK A ZÁROLÁS ÉS A FAGYÁS:
+    # cursor.execute(
+    #     "ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMP;"
+    # )
 
     cursor.execute(
         "SELECT COUNT(*) AS cnt FROM users WHERE username = %s", ("admin",)
