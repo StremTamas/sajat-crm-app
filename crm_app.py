@@ -213,7 +213,7 @@ SHEET_SOURCES = [
     {
         "name": "Promobox ügyfelek",
         "id": "1lvg5SahZ5r9BONF443ZEHj3SIWmxjiNZhbPSU5yj84w",
-        "condition_col": "",
+        "condition_col": "konzultáció_kér",
         "condition_val": "igen",
         "cooldown_days": 30,
     },
@@ -237,7 +237,7 @@ def get_gspread_client():
 
 
 def sync_google_sheets_to_crm():
-    """Google Sheets válaszok beolvasása, 30 napos szűrés és a Sheet sormegjelölése (CRM_OK)."""
+    """Google Sheets válaszok beolvasása, 30 napos szűrés és automatikus sormegjelölés (CRM_OK)."""
     new_leads_count = 0
     try:
         client = get_gspread_client()
@@ -256,11 +256,21 @@ def sync_google_sheets_to_crm():
 
                     headers = [str(h).strip().lower() for h in all_rows[0]]
 
+                    # Keressük a 'Feldolgozva' oszlopot
                     feldolgozva_col_idx = None
                     for idx, h in enumerate(headers):
-                        if "feldolgozva" in h or "status" in h:
+                        if h == "feldolgozva" or h == "crm_statusz":
                             feldolgozva_col_idx = idx + 1
                             break
+
+                    # HA NEM LÉTEZIK 'FELDOLGOZVA' OSZLOP, AUTOMATIKUSAN LÉTREHOZZUK A TÁBLÁZAT VÉGÉN!
+                    if feldolgozva_col_idx is None:
+                        feldolgozva_col_idx = len(headers) + 1
+                        try:
+                            sheet.update_cell(1, feldolgozva_col_idx, "Feldolgozva")
+                            time.sleep(0.5)
+                        except Exception:
+                            pass
 
                     for i, row_values in enumerate(all_rows[1:], start=2):
                         r = {}
@@ -272,7 +282,7 @@ def sync_google_sheets_to_crm():
                             )
                             r[h] = val
 
-                        # Feltétel ellenőrzése (ha van megadva condition_col)
+                        # Feltétel ellenőrzése (pl. Konzultáció_Kér == 'igen')
                         cond_col = src.get("condition_col", "")
                         cond_val = src.get("condition_val", "")
                         if cond_col:
@@ -303,21 +313,14 @@ def sync_google_sheets_to_crm():
                                 or "nev" in k
                                 or "cég" in k
                                 or "kapcsolattartó" in k
-                                or "vállalkozás" in k
+                                or "ügyfél_neve" in k
                             ):
                                 nev = v
-                            elif "feldolgozva" in k or "status" in k:
+                            elif k == "feldolgozva" or k == "crm_statusz":
                                 feldolgozva = v.upper()
 
                         # Ha már fel van dolgozva a Sheetben, átugorjuk
-                        if feldolgozva in [
-                            "OK",
-                            "IGEN",
-                            "FELDOLGOZVA",
-                            "LEZÁRT",
-                            "CRM_OK",
-                            "CRM_DUPLICATE_30D",
-                        ]:
+                        if feldolgozva in ["CRM_OK", "CRM_DUPLICATE_30D", "OK", "IGEN", "FELDOLGOZVA"]:
                             continue
 
                         if not email and not nev and not phone:
@@ -325,8 +328,6 @@ def sync_google_sheets_to_crm():
 
                         if not nev and email:
                             nev = email.split("@")[0].capitalize()
-                        elif not nev and phone:
-                            nev = f"Ismeretlen érdeklődő (Tel: {phone})"
 
                         for k, v in r.items():
                             if v and not any(
@@ -335,7 +336,6 @@ def sync_google_sheets_to_crm():
                                     "időbélyeg",
                                     "timestamp",
                                     "feldolgozva",
-                                    "cégnév",
                                     "e-mail",
                                     "email",
                                     "telefonszám",
@@ -350,24 +350,17 @@ def sync_google_sheets_to_crm():
                             else "Beérkezett kitöltés"
                         )
 
-                        # Adatbázis ellenőrzés (30 napos szabály a forrásra és nyitott státuszra)
-                        if src["name"] == "Ügyfél Évfordulók":
-                            cursor.execute(
-                                f"SELECT id FROM leads WHERE email != '' AND email = %s AND source = %s AND notes = %s AND created_at >= NOW() - INTERVAL '{cooldown} days'",
-                                (email, src["name"], auto_notes),
-                            )
-                        else:
-                            cursor.execute(
-                                f"""
-                                SELECT id FROM leads 
-                                WHERE email = %s 
-                                  AND source = %s 
-                                  AND status NOT IN ('Lezárt', 'Sikertelen', 'Terminált')
-                                  AND created_at >= NOW() - INTERVAL '{cooldown} days'
-                                """,
-                                (email, src["name"]),
-                            )
-
+                        # Adatbázis ellenőrzés (30 napos duplikáció szűrés aktív leadre)
+                        cursor.execute(
+                            f"""
+                            SELECT id FROM leads 
+                            WHERE email = %s 
+                              AND source = %s 
+                              AND status NOT IN ('Lezárt', 'Sikertelen', 'Terminált')
+                              AND created_at >= NOW() - INTERVAL '{cooldown} days'
+                            """,
+                            (email, src["name"]),
+                        )
                         existing = cursor.fetchone()
 
                         if not existing:
@@ -390,17 +383,14 @@ def sync_google_sheets_to_crm():
                             if feldolgozva_col_idx:
                                 try:
                                     sheet.update_cell(i, feldolgozva_col_idx, "CRM_OK")
-                                    time.sleep(0.5)
-                                except Exception as err:
-                                    st.sidebar.warning(
-                                        f"Nem sikerült beírni a CRM_OK-t a Sheetbe a(z) {nev} ügyfélnél: {err}"
-                                    )
+                                    time.sleep(0.3)
+                                except Exception:
+                                    pass
                         else:
-                            # Ha 30 napon belül már aktív lead, megjelöljük a Sheetben duplikátumként
                             if feldolgozva_col_idx:
                                 try:
                                     sheet.update_cell(i, feldolgozva_col_idx, "CRM_DUPLICATE_30D")
-                                    time.sleep(0.5)
+                                    time.sleep(0.3)
                                 except Exception:
                                     pass
 
