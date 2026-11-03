@@ -600,9 +600,10 @@ def process_form_evaluations():
                     cursor = conn.cursor()
                     cursor.execute(
                        try:
+                    try:
                     cursor.execute(
                         "UPDATE leads SET status = %s WHERE email = %s",
-                        (uj_statusz, email),
+                        (uj_statusz, email)
                     )
                     conn.commit()
                     feldolgozott_count += 1
@@ -611,7 +612,6 @@ def process_form_evaluations():
                     st.error(f"Hiba a levél küldésekor ({nev}): {err}")
 
                 finally:
-                    # Ez a rész garantálja, hogy a kapcsolat minden esetben bezárul
                     if 'conn' in locals() and conn:
                         conn.close()
 
