@@ -598,24 +598,23 @@ def process_form_evaluations():
 
                     conn = get_db_connection()
                     cursor = conn.cursor()
-                    cursor.execute(
-                       try:
+
                     try:
-                    cursor.execute(
-                        "UPDATE leads SET status = %s WHERE email = %s",
-                        (uj_statusz, email)
-                    )
-                    conn.commit()
-                    feldolgozott_count += 1
+                        cursor.execute(
+                            "UPDATE leads SET status = %s WHERE email = %s",
+                            (uj_statusz, email)
+                        )
+                        conn.commit()
+                        feldolgozott_count += 1
 
-                except Exception as err:
-                    st.error(f"Hiba a levél küldésekor ({nev}): {err}")
+                    except Exception as err:
+                        st.error(f"Hiba a státusz frissítésekor ({nev}): {err}")
 
-                finally:
-                    if 'conn' in locals() and conn:
-                        conn.close()
+                    finally:
+                        if 'conn' in locals() and conn:
+                            conn.close()
 
-                time.sleep(random.randint(5, 10))
+                    time.sleep(random.randint(5, 10))
                 except Exception as err:
                     st.error(f"Hiba a levél küldésekor ({nev}): {err}")
 
