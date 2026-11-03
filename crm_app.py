@@ -235,11 +235,87 @@ def get_gspread_client():
 
 
 def sync_google_sheets_to_crm():
+    """Google Sheets válaszok beolvasása, 30 napos szűrés és a Sheet sormegjelölése (CRM_OK)."""
     try:
-        client = get_gspread_client()
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        new_leads_count = 0
+        creds = Credentials.from_service_account_file(cred_path, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        sheet = spreadsheet.worksheet(WORKSHEET_NAME)
+
+        # Fejléc és 'Feldolgozva' oszlop indexének megállapítása
+        headers = [str(h).strip() for h in sheet.row_values(1)]
+
+        if "Feldolgozva" in headers:
+            feldolgozva_col_idx = headers.index("Feldolgozva") + 1
+        else:
+            feldolgozva_col_idx = len(headers) + 1
+            sheet.update_cell(1, feldolgozva_col_idx, "Feldolgozva")
+
+        rows = sheet.get_all_records()
+        uj_leadek_szama = 0
+
+        for i, raw_row in enumerate(rows, start=2):  # start=2 a fejléc miatt
+            row = {str(k).strip(): v for k, v in raw_row.items()}
+            statusz = str(row.get("Feldolgozva", "")).strip()
+
+            # 1. HA MÁR FEL VAN DOLGOZVA, AZONNAL ÁTUGORJUK!
+            if statusz == "CRM_OK":
+                continue
+
+            email = str(row.get("E-mail cím", row.get("Email Address", ""))).strip()
+            cegnev = str(row.get("Cégnév", "Vállalkozás")).strip()
+            kapcsolattarto = str(row.get("Név", row.get("Kapcsolattartó", ""))).strip()
+            phone = str(row.get("Telefonszám", "")).strip()
+            forras_kategoria = "Form Űrlap"
+
+            if email:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+
+                try:
+                    # 2. ELLENŐRZÉS: Ugyanabból a forrásból, 30 napon belüli NYITOTT lead létezik-e?
+                    cursor.execute(
+                        """
+                        SELECT id FROM leads 
+                        WHERE email = %s 
+                          AND source = %s 
+                          AND status NOT IN ('Lezárt', 'Sikertelen', 'Terminált')
+                          AND created_at >= NOW() - INTERVAL '30 days'
+                        """,
+                        (email, forras_kategoria)
+                    )
+                    letezo_lead = cursor.fetchone()
+
+                    if not letezo_lead:
+                        # 3. BESZÚRÁS A CRM ADATBÁZISBA
+                        cursor.execute(
+                            """
+                            INSERT INTO leads (client_name, phone, email, contact_person, source, status)
+                            VALUES (%s, %s, %s, %s, %s, 'Új')
+                            """,
+                            (cegnev, phone, email, kapcsolattarto, forras_kategoria)
+                        )
+                        conn.commit()
+
+                        # 4. SIKERES BESZÚRÁS UTÁN MEGJELÖLJÜK A SHEET-BEN!
+                        sheet.update_cell(i, feldolgozva_col_idx, "CRM_OK")
+                        uj_leadek_szama += 1
+                    else:
+                        # Ha 30 napon belül még nyitott, megbélyegezzük, hogy legközelebb ne futtassa a DB ellenőrzést sem
+                        sheet.update_cell(i, feldolgozva_col_idx, "CRM_DUPLICATE_30D")
+
+                except Exception as err:
+                    print(f"Hiba a lead beszúrásakor ({email}): {err}")
+
+                finally:
+                    if 'conn' in locals() and conn:
+                        conn.close()
+
+        return uj_leadek_szama
+
+    except Exception as e:
+        print(f"Szinkronizációs hiba: {e}")
+        return 0
 
         for src in SHEET_SOURCES:
             try:
@@ -352,16 +428,16 @@ def sync_google_sheets_to_crm():
                             )
                         else:
                             cursor.execute(
-                                f"""SELECT id FROM leads 
-                                   WHERE ((email != '' AND email = %s) 
-                                          OR (client_name != '' AND client_name = %s)
-                                          OR (phone != '' AND phone = %s))
-                                     AND source = %s 
-                                     AND created_at >= NOW() - INTERVAL '{cooldown} days'""",
-                                (email, nev, phone, src["name"]),
-                            )
-
-                        existing = cursor.fetchone()
+    """
+    SELECT id FROM leads 
+    WHERE email = %s 
+      AND source = %s 
+      AND status NOT IN ('Lezárt', 'Sikertelen', 'Terminált')
+      AND created_at >= NOW() - INTERVAL '30 days'
+    """,
+    (email, forras_kategoria)
+)
+letezo_lead = cursor.fetchone()
 
                         if not existing:
                             cursor.execute(
