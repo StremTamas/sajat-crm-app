@@ -301,7 +301,7 @@ def sync_google_sheets_to_crm():
                         sheet.update_cell(i, feldolgozva_col_idx, "CRM_OK")
                         uj_leadek_szama += 1
                     else:
-                        # Ha 30 napon belül még nyitott, megbélyegezzük, hogy legközelebb ne futtassa a DB ellenőrzést sem
+                        # Ha 30 napon belül még nyitott, megbélyegezzük
                         sheet.update_cell(i, feldolgozva_col_idx, "CRM_DUPLICATE_30D")
 
                 except Exception as err:
@@ -316,7 +316,6 @@ def sync_google_sheets_to_crm():
     except Exception as e:
         print(f"Szinkronizációs hiba: {e}")
         return 0
-
         for src in SHEET_SOURCES:
             try:
                 spreadsheet = client.open_by_key(src["id"])
