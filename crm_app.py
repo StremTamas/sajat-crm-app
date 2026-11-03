@@ -875,7 +875,27 @@ if menu in ["Saját Leadek / Dashboard", "🗄️ Archívum (Lezárt leadek)"]:
                 "notes": "Infó / Munkatárs Megjegyzése",
             }
         )
-
+        # (Itt ér véget a te rename blokkod)
+        
+        # --- ÚJ RÉSZ: Oszlopok sorrendjének átrendezése ---
+        # 1. Definiáljuk, mi legyen legelöl, kézre eső helyen (mobilon is)
+        kiemelt_oszlopok = [
+            "ID", 
+            "SLA Státusz", 
+            "Ügyfél / Cégnév", 
+            "Kapcsolattartó",
+            "Telefonszám", 
+            "Hívás (Tel)"
+        ]
+        
+        # 2. Összegyűjtjük a maradék oszlopot
+        tobbi_oszlop = [kol for kol in df_display.columns if kol not in kiemelt_oszlopok]
+        
+        # 3. Újrarendezzük a megjelenítendő táblázatot
+        df_display = df_display[kiemelt_oszlopok + tobbi_oszlop]
+        
+        # Ezután jöhet a már meglévő st.dataframe(df_display, ...) sorod
+        
         all_cols = list(df_display.columns)
         with st.expander("👁️ Megjelenítendő Oszlopok kiválasztása"):
             visible_cols = st.multiselect(
