@@ -599,14 +599,23 @@ def process_form_evaluations():
                     conn = get_db_connection()
                     cursor = conn.cursor()
                     cursor.execute(
+                       try:
+                    cursor.execute(
                         "UPDATE leads SET status = %s WHERE email = %s",
                         (uj_statusz, email),
                     )
                     conn.commit()
-                    conn.close()
-
                     feldolgozott_count += 1
-                    time.sleep(random.randint(5, 10))
+
+                except Exception as err:
+                    st.error(f"Hiba a levél küldésekor ({nev}): {err}")
+
+                finally:
+                    # Ez a rész garantálja, hogy a kapcsolat minden esetben bezárul
+                    if 'conn' in locals() and conn:
+                        conn.close()
+
+                time.sleep(random.randint(5, 10))
                 except Exception as err:
                     st.error(f"Hiba a levél küldésekor ({nev}): {err}")
 
